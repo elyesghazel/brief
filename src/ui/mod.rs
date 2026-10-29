@@ -1080,7 +1080,7 @@ impl App {
                 let row = gtk::ListBoxRow::new();
                 row.set_selectable(false);
                 row.set_activatable(false);
-                let l = label("signed out · Ctrl+K, sign in again", "side-name side-item side-signed-out");
+                let l = label("signed out · Ctrl+K", "side-name side-item side-signed-out");
                 ellipsize(&l);
                 row.set_child(Some(&l));
                 self.side.append(&row);

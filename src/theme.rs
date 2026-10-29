@@ -78,7 +78,7 @@ fn user_css(name: &str) -> Option<String> {
 const EG_CSS: &str = r#"
 .brand, .path, .sync, .statusbar, .mode, .key, .desc, .side-acct-name, .side-acct-mail, .side-key,
 .pill, .msg-date, .dialog-title, .form-label, .form-hint, .form-ok, .form-error, .r-note, .chip-size,
-.empty-title {
+.empty-title, .form-key, .step, .setup-kicker, .swatch-name, .check-detail {
   font-family: "JetBrains Mono", "JetBrainsMono Nerd Font", monospace;
 }
 .brand { letter-spacing: -0.02em; }
@@ -98,6 +98,11 @@ fn builtin_css(t: &Builtin) -> String {
         css += EG_CSS;
     }
     css
+}
+
+/// Background, text and accent of a built-in theme, for the setup's theme picker.
+pub fn swatch(name: &str) -> Option<[&'static str; 3]> {
+    BUILTIN.iter().find(|t| t.name == name).map(|t| [t.colors[0], t.colors[1], t.colors[5]])
 }
 
 /// Every theme name: `zunder`, the built-ins, then user themes (brief's and zunder's).

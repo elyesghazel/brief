@@ -251,9 +251,70 @@ row:selected .title  { font-weight: bold; }
 .form-hint  { color: @faint; padding: 8px 20px 0; font-size: 0.9em; }
 .form-key   { color: @faint; font-size: 0.8em; border: 1px solid alpha(@ghost, 0.9); border-radius: 2px; padding: 0 5px; margin-left: 10px; }
 .signin-text { color: @fg; font-weight: bold; }
-.signin-text.wait { color: @accent; }
-.signin-text.ok   { color: @green; }
 .servers-text { color: @faint; }
+
+/* account setup */
+.scrim.solid { background: @bg; }
+button.focus-sink { min-width: 0; min-height: 0; padding: 0; border: none; background: none; box-shadow: none; outline: none; opacity: 0; }
+.setup { padding: 16px 0 20px; }
+.setup-head { padding: 0 20px 12px; border-bottom: 1px solid alpha(@ghost, 0.6); margin-bottom: 4px; }
+.setup-head .brand { font-size: 1em; }
+.step { color: @ghost; font-size: 0.85em; margin-left: 6px; }
+.step.past { color: @faint; }
+.step.now { color: @accent; font-weight: bold; }
+.step-sep { color: @ghost; }
+.setup-page { padding: 14px 20px 0; }
+.setup-title { color: @fg; font-weight: 800; font-size: 1.3em; margin-bottom: 2px; }
+.setup-sub { color: @faint; margin-bottom: 14px; }
+.setup-kicker { color: @faint; font-size: 0.8em; letter-spacing: 0.12em; text-transform: uppercase; margin: 6px 0 8px; }
+.welcome .logo { margin-bottom: 14px; }
+.welcome .setup-title { font-size: 1.6em; }
+.welcome .setup-sub { margin-bottom: 18px; }
+.swatches { margin-bottom: 20px; }
+.swatch-cell { padding: 3px; border: 1px solid transparent; border-radius: 3px; }
+.swatch-cell.current { border-color: @accent; }
+.swatch { min-width: 66px; min-height: 44px; border-radius: 2px; padding: 6px 8px; box-shadow: inset 0 0 0 1px alpha(@ghost, 0.9); }
+.swatch-fg { font-weight: bold; }
+.swatch-accent { min-width: 22px; min-height: 3px; border-radius: 1px; }
+.swatch-name { color: @faint; font-size: 0.78em; }
+.swatch-cell.current .swatch-name { color: @fg; }
+.setup-go { padding-top: 14px; border-top: 1px solid alpha(@ghost, 0.6); }
+.setup-go .form-key { margin: 0 10px 0 0; color: @bg; background: @accent; border-color: @accent; font-weight: bold; }
+.setup-go-text { color: @fg; }
+entry.big-field, entry.big-field:focus-within {
+  font-size: 1.35em; padding: 6px 0 8px; margin-bottom: 6px;
+  border-bottom: 1px solid alpha(@ghost, 0.9); border-radius: 0;
+}
+entry.big-field:focus-within { border-bottom-color: @accent; }
+.setup .form { padding: 0; }
+.setup .form-hint, .setup .form-error, .setup .form-ok { padding: 10px 0 0; }
+.setup .form-hint link { color: @accent; }
+.checklist { margin: 8px 0 4px; }
+.check-row { padding: 9px 0; border-bottom: 1px solid alpha(@ghost, 0.6); }
+.check-icon { color: @ghost; min-width: 26px; font-weight: bold; }
+.check-icon.ok { color: @green; }
+.check-icon.fail { color: @red; }
+.check-spin { min-width: 14px; min-height: 14px; margin-right: 12px; }
+.check-text { color: @faint; }
+.check-text.run, .check-text.ok { color: @fg; }
+.check-text.fail { color: @red; }
+.check-detail { color: @faint; font-size: 0.9em; margin-left: 16px; }
+.check-error { color: @red; font-weight: bold; padding-top: 14px; }
+button.dots, button.dots:hover, button.dots:focus { background: none; border: none; box-shadow: none; outline: none; padding: 2px 0; min-height: 0; }
+.color-dot { min-width: 14px; min-height: 14px; border-radius: 99px; outline: 1px solid transparent; outline-offset: 2px; }
+.color-dot.current { outline-color: @faint; }
+button.dots:focus .color-dot.current { outline-color: @fg; }
+/* "auto" follows the theme: a ring in the color the account would get */
+.dot-auto-0, .dot-c0 { box-shadow: inset 0 0 0 2px @accent; }
+.dot-auto-1 { box-shadow: inset 0 0 0 2px @green; }
+.dot-auto-2 { box-shadow: inset 0 0 0 2px @yellow; }
+.dot-auto-3 { box-shadow: inset 0 0 0 2px @red; }
+.dot-c1 { background: #7aa2f7; }
+.dot-c2 { background: #6cc28a; }
+.dot-c3 { background: #d9ad5b; }
+.dot-c4 { background: #ff5f56; }
+.dot-c5 { background: #c4a7e7; }
+.dot-c6 { background: #89dceb; }
 
 .compose { background: @bg; }
 .compose-head { padding: 18px 28px 8px; border-bottom: 1px solid alpha(@ghost, 0.7); }
