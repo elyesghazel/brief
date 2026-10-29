@@ -706,3 +706,49 @@ impl App {
         }
     }
 }
+
+/// `brief render FILE.eml` (for checks, not in the help): the window with one mail from a file in
+/// the reader and a row of every folder emoji under the subject. Uses the normal config and cache.
+pub fn render(path: &str) -> glib::ExitCode {
+    let parsed = std::fs::read(path).ok().and_then(|raw| message::parse(&raw));
+    let Some(parsed) = parsed else {
+        eprintln!("brief: {path} is not a message");
+        return glib::ExitCode::FAILURE;
+    };
+    let parsed = RefCell::new(Some(parsed));
+    let gapp = gtk::Application::builder().flags(gtk::gio::ApplicationFlags::NON_UNIQUE).build();
+    gapp.connect_startup(|_| gtk::Window::set_default_icon_name("ch.elyesghazel.brief"));
+    gapp.connect_activate(move |gapp| {
+        let Some(p) = parsed.take() else { return };
+        let app = super::build(gapp);
+        app.hide_overlay();
+        let row = Row {
+            acct: String::new(),
+            folder: "render".into(),
+            uid: 0,
+            subject: p.subject.clone(),
+            from_name: p.from.clone(),
+            from_addr: p.from_addr.clone(),
+            to: p.to.join(", "),
+            date: p.date,
+            seen: true,
+            flagged: false,
+            answered: false,
+            attach: !p.attachments.is_empty(),
+            preview: String::new(),
+            msgid: p.msgid.clone(),
+            refs: String::new(),
+            count: 0,
+            people: String::new(),
+        };
+        *app.current.borrow_mut() = Some((row.clone(), Some(Rc::new(p))));
+        app.show_message(row);
+        let strip = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        for name in ["inbox", "sent", "drafts", "archive", "trash", "junk", "flagged", "all", "unified", "shield", "clip", "folder"] {
+            strip.append(&emoji(name, 22));
+        }
+        app.rd.subject.parent().and_downcast::<gtk::Box>().unwrap().append(&strip);
+        app.set_focus(Pane::Reader);
+    });
+    gapp.run_with_args(&["brief"])
+}

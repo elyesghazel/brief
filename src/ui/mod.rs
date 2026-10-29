@@ -11,6 +11,8 @@ mod settings;
 mod web;
 mod widgets;
 
+pub use reader::render;
+
 use crate::config::{self, Account, Config};
 use crate::imap::{self, Cmd, Event};
 use crate::message::{self, Parsed};

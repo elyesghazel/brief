@@ -121,6 +121,120 @@ jobs:
             if (-not $alive -or $ms -ge 30000) { throw "the window did not come up" }
             Write-Host "window up after $ms ms ($run)"
           }
+      # a styled HTML mail in the reader through WebView2, then: Space scrolls it, ? puts the help
+      # over it (the view has to hide), Esc brings it back, it follows a resize, Ctrl+= zooms, a
+      # double-click selects text and hands the keys back (Ctrl+C copies, G goes to the end), a
+      # mailto: link opens the composer; without WebView2Loader.dll the mail shows as text
+      - name: html smoke test
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Windows\system32;C:\Windows"
+          $exe = (Resolve-Path dist\brief\brief.exe).Path
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($name) {
+            $r = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = [Drawing.Bitmap]::new($r.Width, $r.Height)
+            [Drawing.Graphics]::FromImage($bmp).CopyFromScreen($r.Location, [Drawing.Point]::Empty, $r.Size)
+            $bmp.Save("$PWD\dist\$name.png")
+          }
+          function Key($k) {
+            [Windows.Forms.SendKeys]::SendWait($k)
+            Start-Sleep -Seconds 1
+          }
+          Add-Type @"
+          using System; using System.Runtime.InteropServices; using System.Text;
+          public static class W {
+            public struct RECT { public int Left, Top, Right, Bottom; }
+            public delegate bool EnumProc(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr p, EnumProc f, IntPtr l);
+            [DllImport("user32.dll")] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+            [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] static extern void mouse_event(uint f, uint dx, uint dy, uint d, IntPtr e);
+            [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool paint);
+            // the screen rectangle of the visible WebView2 window inside brief's
+            public static RECT View(IntPtr top) {
+              RECT found = new RECT();
+              EnumChildWindows(top, (h, l) => {
+                var s = new StringBuilder(256);
+                GetClassName(h, s, 256);
+                if (s.ToString().StartsWith("Chrome_WidgetWin") && IsWindowVisible(h)) { GetWindowRect(h, out found); return false; }
+                return true;
+              }, IntPtr.Zero);
+              return found;
+            }
+            public static void Click(int x, int y, int n) {
+              SetCursorPos(x, y);
+              for (int i = 0; i < n; i++) {
+                mouse_event(2, 0, 0, 0, IntPtr.Zero);
+                mouse_event(4, 0, 0, 0, IntPtr.Zero);
+              }
+            }
+          }
+          "@
+          # an account that never connects, so mailto: links get a composer
+          Add-Content "$env:APPDATA\brief\config.toml" "`n[[account]]`nname = `"Test`"`nemail = `"test@example.org`"`nimap = { host = `"127.0.0.1`", port = 9, security = `"none`" }`nsmtp = { host = `"127.0.0.1`", port = 9, security = `"none`" }`npassword_cmd = `"echo x`""
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $p = Start-Process $exe -ArgumentList "render", "`"$PWD\tests\fixtures\newsletter.eml`"" -PassThru -RedirectStandardError render.txt
+          while (-not (Select-String render.txt -Pattern "webview2" -Quiet -ErrorAction SilentlyContinue) -and -not $p.HasExited -and $sw.ElapsedMilliseconds -lt 60000) {
+            Start-Sleep -Milliseconds 50
+          }
+          Write-Host "webview2 up after $($sw.ElapsedMilliseconds) ms from launch"
+          Start-Sleep -Seconds 2
+          Shot html
+          Key " "
+          Shot html-scrolled
+          Key "?"
+          Shot html-help
+          Key "{ESC}"
+          Shot html-back
+          $p.Refresh()
+          $before = [W]::View($p.MainWindowHandle)
+          [void][W]::MoveWindow($p.MainWindowHandle, 40, 20, 940, 700, $true)
+          Start-Sleep -Seconds 1
+          Shot html-resized
+          $after = [W]::View($p.MainWindowHandle)
+          Write-Host "webview2 window $($before.Left),$($before.Top)-$($before.Right),$($before.Bottom) before the resize, $($after.Left),$($after.Top)-$($after.Right),$($after.Bottom) after"
+          if ($after.Right -eq $before.Right -and $after.Bottom -eq $before.Bottom) { throw "the WebView2 window did not follow the resize" }
+          Key "^="
+          Shot html-zoom
+          Key "^0"
+          Key "{HOME}"
+          $p.Refresh()
+          $v = [W]::View($p.MainWindowHandle)
+          Write-Host "webview2 window at $($v.Left),$($v.Top) to $($v.Right),$($v.Bottom)"
+          if ($v.Right -le $v.Left) { throw "no visible WebView2 window" }
+          Set-Clipboard -Value "nothing"
+          [W]::Click($v.Left + 200, $v.Top + 149, 2)
+          Start-Sleep -Seconds 1
+          Key "^c"
+          $copied = Get-Clipboard
+          Write-Host "Ctrl+C after a double-click copied '$copied'"
+          if (-not $copied -or $copied -eq "nothing") { throw "Ctrl+C did not copy the selection" }
+          Key "G"
+          Shot html-select-end
+          Key "{HOME}"
+          [W]::Click($v.Left + 120, $v.Top + 45, 1)
+          Start-Sleep -Seconds 2
+          Shot html-mailto
+          if ([W]::View($p.MainWindowHandle).Right -gt 0) { throw "the WebView2 window stayed up over the composer" }
+          if (-not $p.HasExited) { Stop-Process $p -Force }
+          Get-Content render.txt | Out-Host
+          if (-not (Select-String render.txt -Pattern "webview2 .* ready" -Quiet)) { throw "the WebView2 controller was not created" }
+          if (-not (Test-Path "$env:LOCALAPPDATA\brief\webview2")) { throw "no WebView2 user data folder" }
+          # without the loader DLL the same mail shows as text, with a note
+          $alt = "$env:RUNNER_TEMP\brief-noloader"
+          Copy-Item dist\brief $alt -Recurse
+          Remove-Item "$alt\WebView2Loader.dll"
+          $p = Start-Process "$alt\brief.exe" -ArgumentList "render", "`"$PWD\tests\fixtures\newsletter.eml`"" -PassThru -RedirectStandardError render-missing.txt
+          Start-Sleep -Seconds 6
+          Shot html-missing
+          $alive = -not $p.HasExited
+          if ($alive) { Stop-Process $p -Force }
+          Get-Content render-missing.txt | Out-Host
+          if (-not $alive) { throw "brief died without WebView2Loader.dll" }
+          if (-not (Select-String render-missing.txt -Pattern "webview2 unavailable" -Quiet)) { throw "no text fallback without WebView2Loader.dll" }
       # Inno Setup: preinstalled on some runner images, else from Chocolatey
       - name: installer
         shell: pwsh
@@ -214,7 +328,7 @@ jobs:
         if: always()
         with:
           name: screenshot
-          path: dist/screenshot.png
+          path: dist/*.png
           if-no-files-found: ignore
 
   # On a v* tag: a GitHub release. From workflow_dispatch with release_dry_run: the same files and

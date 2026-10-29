@@ -70,6 +70,10 @@ fn main() -> glib::ExitCode {
             }
             return glib::ExitCode::SUCCESS;
         }
+        Some("render") if args.len() == 2 => {
+            platform::prepare_gui();
+            return ui::render(&args[1]);
+        }
         Some(url) if mailto::is_mailto(url) => {}
         Some(other) if !other.starts_with("--gapplication") => {
             eprintln!("brief: unknown command {other}\n\n{}", help());
