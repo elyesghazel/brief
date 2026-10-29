@@ -806,6 +806,9 @@ impl App {
             Event::Error { acct, text } => {
                 let name = self.accounts.borrow().get(acct).map(|a| a.name.clone()).unwrap_or_default();
                 self.toast(&format!("{name}: {text}"), true);
+                if self.accounts.borrow().get(acct).is_some_and(crate::oauth::needs_sign_in) {
+                    self.rebuild_side();
+                }
             }
             Event::Folders => {
                 self.rebuild_side();
@@ -873,7 +876,11 @@ impl App {
             self.sync_label.set_text(&busy.join("  "));
         } else {
             self.spinner.stop();
-            if let Some(name) = error {
+            let signed_out = accounts.iter().find(|a| crate::oauth::needs_sign_in(a)).map(|a| a.name.clone());
+            if let Some(name) = signed_out {
+                self.sync_label.add_css_class("error");
+                self.sync_label.set_text(&format!("{name} signed out · ^K sign in again"));
+            } else if let Some(name) = error {
                 self.sync_label.add_css_class("error");
                 self.sync_label.set_text(&format!("{name} offline · ^R retry"));
             } else {
@@ -1069,6 +1076,16 @@ impl App {
             head.set_child(Some(&hb));
             self.side.append(&head);
             items.push(SideItem::Header(i));
+            if crate::oauth::needs_sign_in(acc) {
+                let row = gtk::ListBoxRow::new();
+                row.set_selectable(false);
+                row.set_activatable(false);
+                let l = label("signed out · Ctrl+K, sign in again", "side-name side-item side-signed-out");
+                ellipsize(&l);
+                row.set_child(Some(&l));
+                self.side.append(&row);
+                items.push(SideItem::Header(i));
+            }
             let folders = store.folders(&acc.name);
             if folders.is_empty() {
                 let row = gtk::ListBoxRow::new();

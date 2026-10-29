@@ -354,6 +354,19 @@ impl App {
             item("Edit draft / edit as new", "E", |a| a.compose_edit()),
             item("Quit", "q", |a| a.win.close()),
         ]);
+        // signed-out accounts first, so Ctrl+K Enter fixes them
+        let mut again: Vec<Item> = Vec::new();
+        for acc in self.accounts.borrow().iter().filter(|a| a.is_oauth()) {
+            let name = acc.name.clone();
+            let title = format!("Sign in again: {name}");
+            let it = item(title, acc.email.clone(), move |a| a.sign_in_again(&name));
+            if crate::oauth::needs_sign_in(acc) {
+                again.push(Item { sub: "signed out".into(), ..it });
+            } else {
+                items.push(it);
+            }
+        }
+        items.splice(0..0, again);
         items.extend(self.folder_items(|a, acct, folder| a.open_view(View::Folder { acct, folder }), "Go to "));
         self.open_palette("commands", items, "", None);
     }
