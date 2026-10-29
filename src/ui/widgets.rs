@@ -37,9 +37,16 @@ pub fn logo(px: i32) -> gtk::Image {
 
 /// An emoji icon about `px` pixels tall.
 pub fn emoji(name: &str, px: i32) -> gtk::Label {
-    let l = gtk::Label::new(Some(emoji_char(name)));
+    let text = emoji_char(name);
+    // Pango on Windows draws the U+FE0F of "🗑️" as a missing glyph box; Segoe UI Emoji, named
+    // outright, colors the base character without it
+    #[cfg(windows)]
+    let text = text.trim_end_matches('\u{FE0F}');
+    let l = gtk::Label::new(Some(text));
     let attrs = pango::AttrList::new();
     attrs.insert(pango::AttrSize::new_size_absolute(px * pango::SCALE * 4 / 5));
+    #[cfg(windows)]
+    attrs.insert(pango::AttrFontDesc::new(&pango::FontDescription::from_string("Segoe UI Emoji")));
     l.set_attributes(Some(&attrs));
     l.add_css_class("emoji");
     l
