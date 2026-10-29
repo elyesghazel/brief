@@ -3,7 +3,7 @@
 use std::os::windows::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use windows_sys::Win32::Security::Credentials::{CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW, CredWriteW};
+use windows_sys::Win32::Security::Credentials::{CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW, CredWriteW};
 use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_OUTPUT_HANDLE};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -120,6 +120,12 @@ pub fn keyring_store(service: &str, email: &str, pass: &str) -> bool {
         ..unsafe { std::mem::zeroed() }
     };
     unsafe { CredWriteW(&cred, 0) != 0 }
+}
+
+/// Removes a Credential Manager entry, if there is one.
+pub fn keyring_clear(service: &str, email: &str) {
+    let target = target(service, email);
+    unsafe { CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) };
 }
 
 /// Empty: brief reads the Credential Manager itself, nothing to run.

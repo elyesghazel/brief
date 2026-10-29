@@ -77,6 +77,15 @@ pub fn keyring_store(service: &str, email: &str, pass: &str) -> bool {
     child.wait().is_ok_and(|s| s.success())
 }
 
+/// Removes a keyring entry, if there is one.
+pub fn keyring_clear(service: &str, email: &str) {
+    let _ = Command::new("secret-tool")
+        .args(["clear", "service", service, "account", email])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 /// The `password_cmd` written for an account whose password went to the keyring.
 pub fn keyring_cmd(email: &str) -> String {
     format!("secret-tool lookup service brief account {email}")

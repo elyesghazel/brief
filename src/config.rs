@@ -1,7 +1,8 @@
 //! `~/.config/brief/config.toml`: look, behaviour and the accounts.
 //!
 //! The file stays hand-editable: brief never rewrites it as a whole. Changing the theme replaces
-//! the `theme = ` line, adding an account appends an `[[account]]` block.
+//! the `theme = ` line, adding an account appends an `[[account]]` block, removing one cuts out
+//! just that block.
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -375,6 +376,75 @@ fn oauth_key(email: &str) -> String {
     format!("oauth:{email}")
 }
 
+/// `[[account]]`, or `[account.imap]` and friends when `sub`.
+fn account_header(line: &str, sub: bool) -> bool {
+    let t: String = line.split('#').next().unwrap_or_default().chars().filter(|c| !c.is_whitespace()).collect();
+    if sub { t.starts_with("[account.") } else { t == "[[account]]" }
+}
+
+fn is_comment(line: &str) -> bool {
+    line.trim_start().starts_with('#')
+}
+
+/// The config text without the `[[account]]` block named `name` and the comment lines right above
+/// it; every other line stays as it was. None when there is no such account, or when the cut
+/// would change anything else (then the file needs a hand edit).
+pub fn without_account(text: &str, name: &str) -> Option<String> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let blank = |i: usize| lines[i].trim().is_empty();
+    for start in (0..lines.len()).filter(|&i| account_header(lines[i], false)) {
+        let mut end = (start + 1..lines.len())
+            .find(|&i| lines[i].trim_start().starts_with('[') && !account_header(lines[i], true))
+            .unwrap_or(lines.len());
+        // comments and blank lines before the next block (or the end) are not this block's
+        while end > start + 1 && (blank(end - 1) || is_comment(lines[end - 1])) {
+            end -= 1;
+        }
+        let Ok(block) = lines[start..end].concat().parse::<toml::Table>() else { continue };
+        let this = block.get("account").and_then(|a| a.get(0)).and_then(|a| a.get("name")).and_then(|n| n.as_str());
+        if this != Some(name) {
+            continue;
+        }
+        let mut from = start;
+        while from > 0 && is_comment(lines[from - 1]) {
+            from -= 1;
+        }
+        if from > 0 && blank(from - 1) {
+            from -= 1;
+        }
+        let out = lines[..from].concat() + &lines[end..].concat();
+        // the rest must parse to exactly what it was, minus this account
+        let mut want: toml::Table = text.parse().ok()?;
+        let list = want.get_mut("account")?.as_array_mut()?;
+        let pos = list.iter().position(|a| a.get("name").and_then(|n| n.as_str()) == Some(name))?;
+        list.remove(pos);
+        if list.is_empty() {
+            want.remove("account");
+        }
+        return (out.parse::<toml::Table>().ok()? == want).then_some(out);
+    }
+    None
+}
+
+/// Removes an account's block from the config file.
+pub fn remove_account(name: &str) -> Result<(), String> {
+    let path = path();
+    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let out = without_account(&text, name).ok_or_else(|| format!("could not cut {name} out of {}, edit it by hand", path.display()))?;
+    fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Forgets what brief saved for an address: password and OAuth sign-in, in the keyring and in
+/// secrets.toml.
+pub fn forget_password(email: &str) {
+    crate::platform::keyring_clear("brief", email);
+    crate::platform::keyring_clear(OAUTH_SERVICE, email);
+    let Some(mut table) = fs::read_to_string(secrets_path()).ok().and_then(|t| t.parse::<toml::Table>().ok()) else { return };
+    if table.remove(email).is_some() | table.remove(&oauth_key(email)).is_some() {
+        let _ = crate::platform::write_private(&secrets_path(), toml::to_string(&table).unwrap_or_default().as_bytes());
+    }
+}
+
 /// Stores a password in the keyring. Returns false when there is none.
 pub fn keyring_store(email: &str, pass: &str) -> bool {
     crate::platform::keyring_store("brief", email, pass)
@@ -518,6 +588,94 @@ smtp = { host = "mail.example.com", port = 587 }
         assert_eq!(accs[1].oauth.client_secret, "shared-secret");
         assert!(!accs[2].is_oauth());
         assert_eq!(accs[2].oauth, OAuth::default());
+    }
+
+    const SEVERAL: &str = r#"# my mail
+theme = "eg"  # dark
+
+# Personal, the main one
+[[account]]
+name = "Personal"
+email = "me@x.ch"
+imap = { host = "imap.x.ch", port = 993 }
+smtp = { host = "smtp.x.ch", port = 465 }
+password_cmd = "pass x"   # keyring is broken here
+
+# work, careful
+[[account]]
+name = "Work"
+email = "me@work.ch"
+signature = "-- \nMe"
+[account.imap]
+host = "imap.work.ch"
+port = 993
+[account.smtp]
+host = "smtp.work.ch"
+port = 587
+security = "starttls"
+
+[[account]] # the old one
+name = "Old"
+email = "old@x.ch"
+imap = { host = "imap.x.ch", port = 993 }
+smtp = { host = "smtp.x.ch", port = 465 }
+# trailing note
+"#;
+
+    fn names(text: &str) -> Vec<String> {
+        toml::from_str::<Config>(text).unwrap().accounts.into_iter().map(|a| a.name).collect()
+    }
+
+    #[test]
+    fn removes_middle_block_with_subtables() {
+        let out = without_account(SEVERAL, "Work").unwrap();
+        assert_eq!(names(&out), ["Personal", "Old"]);
+        assert!(!out.contains("work"));
+        assert!(out.contains("password_cmd = \"pass x\"   # keyring is broken here\n\n[[account]] # the old one"));
+        assert!(out.starts_with("# my mail\ntheme = \"eg\"  # dark\n\n# Personal, the main one\n"));
+    }
+
+    #[test]
+    fn removes_first_and_last_blocks() {
+        let out = without_account(SEVERAL, "Personal").unwrap();
+        assert_eq!(names(&out), ["Work", "Old"]);
+        assert!(out.starts_with("# my mail\ntheme = \"eg\"  # dark\n\n# work, careful\n[[account]]"));
+        let out = without_account(SEVERAL, "Old").unwrap();
+        assert_eq!(names(&out), ["Personal", "Work"]);
+        assert!(out.ends_with("security = \"starttls\"\n# trailing note\n"));
+        let none = without_account(&without_account(&out, "Work").unwrap(), "Personal").unwrap();
+        assert!(names(&none).is_empty());
+        assert_eq!(toml::from_str::<Config>(&none).unwrap().theme, "eg");
+    }
+
+    #[test]
+    fn appended_block_comes_out_clean() {
+        let (imap, smtp) = guess_servers("me@gmail.com");
+        let acc = Account {
+            name: "Gmail".into(),
+            email: "me@gmail.com".into(),
+            display_name: String::new(),
+            user: String::new(),
+            imap,
+            smtp,
+            password_cmd: String::new(),
+            password: String::new(),
+            signature: String::new(),
+            color: String::new(),
+            auth: Auth::Password,
+            oauth: OAuth::default(),
+        };
+        let text = format!("{TEMPLATE}{}", acc.to_toml());
+        assert_eq!(without_account(&text, "Gmail").unwrap(), TEMPLATE);
+    }
+
+    #[test]
+    fn unknown_or_unsafe_cut_is_refused() {
+        assert!(without_account(SEVERAL, "Nope").is_none());
+        assert!(without_account(TEMPLATE, "Personal").is_none());
+        // a multi-line string with a line that looks like a table header
+        let tricky = "[[account]]\nname = \"A\"\nemail = \"a@x\"\nsignature = \"\"\"\n[x]\n\"\"\"\n";
+        assert!(without_account(tricky, "A").is_none());
     }
 
     #[test]
