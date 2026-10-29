@@ -1359,7 +1359,7 @@ impl App {
     pub fn toggle_threads(self: &Rc<Self>) {
         let on = !self.threads();
         self.cfg.borrow_mut().threads = on;
-        config::save_value("threads", if on { "true" } else { "false" });
+        config::save_value("threads", on);
         self.reload_list();
         match self.selected_index() {
             Some(i) => self.open_row(i),

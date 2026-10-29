@@ -11,6 +11,9 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::Stdio;
 
+mod edit;
+pub use edit::Scope;
+
 #[derive(Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
@@ -343,42 +346,56 @@ impl Config {
     }
 }
 
+/// Sets a top-level key in config.toml, e.g. `set("theme", "eg")`.
+pub fn set(key: &str, value: impl Into<toml::Value>) -> Result<(), String> {
+    write_edit(Scope::Top, &[key], Some(value.into()))
+}
+
+/// Sets (`Some`) or removes a field of the account named `name`; `path` is `["color"]` or
+/// `["imap", "host"]`.
+pub fn set_account(name: &str, path: &[&str], value: Option<toml::Value>) -> Result<(), String> {
+    write_edit(Scope::Account(name), path, value)
+}
+
 /// Replaces (or adds) the top-level `theme = ` line.
 pub fn save_theme(name: &str) {
-    save_value("theme", &format!("\"{name}\""));
+    save_value("theme", name);
 }
 
-/// Replaces (or adds) a top-level `key = value` line, keeping its comment.
-pub fn save_value(key: &str, value: &str) {
-    let path = path();
-    let text = fs::read_to_string(&path).unwrap_or_default();
-    let _ = fs::write(&path, set_value(&text, key, value));
-}
-
-fn set_value(text: &str, key: &str, value: &str) -> String {
-    let line = format!("{key} = {value}");
-    let mut done = false;
-    let mut out: Vec<String> = Vec::new();
-    let mut in_table = false;
-    for l in text.lines() {
-        if l.trim_start().starts_with('[') {
-            in_table = true;
-        }
-        let is_key = l.trim_start().strip_prefix(key).is_some_and(|r| r.trim_start().starts_with('='));
-        if !done && !in_table && is_key {
-            let comment = l.find('#').map(|i| format!("        {}", &l[i..])).unwrap_or_default();
-            out.push(line.clone() + &comment);
-            done = true;
-        } else {
-            out.push(l.to_owned());
-        }
+/// `set` for callers that only report a failure.
+pub fn save_value(key: &str, value: impl Into<toml::Value>) {
+    if let Err(e) = set(key, value) {
+        crate::log::warn(&e);
     }
-    if !done {
-        out.insert(0, line);
-    }
-    out.join("\n") + "\n"
 }
 
+fn write_edit(scope: Scope, key: &[&str], value: Option<toml::Value>) -> Result<(), String> {
+    // through a symlink (dotfiles), write the real file
+    let link = path();
+    let file = fs::canonicalize(&link).unwrap_or(link);
+    let text = match fs::read_to_string(&file) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("{}: {e}", file.display())),
+    };
+    let what = key.join(".");
+    let out = edit::edit(&text, scope, key, value.as_ref()).map_err(|e| format!("{what} not saved, {e}; edit {} by hand", file.display()))?;
+    if out == text {
+        return Ok(());
+    }
+    // a new file next to it, then a rename: the old one stays whole if anything fails
+    let tmp = file.with_extension("toml.tmp");
+    let written = fs::write(&tmp, &out).and_then(|()| {
+        if let Ok(m) = fs::metadata(&file) {
+            fs::set_permissions(&tmp, m.permissions())?;
+        }
+        fs::rename(&tmp, &file)
+    });
+    written.map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("{what} not saved, {}: {e}", file.display())
+    })
+}
 pub fn append_account(acc: &Account) -> std::io::Result<()> {
     let mut f = fs::OpenOptions::new().append(true).create(true).open(path())?;
     f.write_all(acc.to_toml().as_bytes())
@@ -740,14 +757,12 @@ smtp = { host = "smtp.x.ch", port = 465 }
     }
 
     #[test]
-    fn value_lines_replace_or_add() {
-        let text = set_value(TEMPLATE, "threads", "false");
-        let cfg: Config = toml::from_str(&text).unwrap();
-        assert!(!cfg.threads);
-        assert_eq!(cfg.theme, "graphite");
-        let text = set_value(&text, "threads", "true");
-        assert!(text.starts_with("threads = true\n"));
-        let text = set_value(&text, "theme", "\"eg\"");
-        assert!(text.contains("theme = \"eg\"        # Ctrl+T"));
+    fn template_examples_come_alive() {
+        let out = edit::edit(TEMPLATE, Scope::Top, &["html"], Some(&toml::Value::Boolean(false))).unwrap();
+        assert!(out.contains("\nhtml = false               # render HTML mail;"));
+        assert!(!toml::from_str::<Config>(&out).unwrap().html);
+        let out = edit::edit(&out, Scope::Top, &["theme"], Some(&toml::Value::String("eg".into()))).unwrap();
+        assert!(out.contains("\ntheme = \"eg\"              # Ctrl+T to pick;"));
+        assert_eq!(out.lines().count(), TEMPLATE.lines().count());
     }
 }

@@ -1296,7 +1296,7 @@ impl App {
         let bar = &self.compose.rich.bar;
         bar.set_visible(!bar.is_visible());
         self.cfg.borrow_mut().toolbar = bar.is_visible();
-        crate::config::save_value("toolbar", if bar.is_visible() { "true" } else { "false" });
+        crate::config::save_value("toolbar", bar.is_visible());
         self.compose.rich.update_bar();
     }
 }
