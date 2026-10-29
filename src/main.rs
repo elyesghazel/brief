@@ -4,6 +4,7 @@ mod avatar;
 mod config;
 mod imap;
 mod message;
+mod platform;
 mod smtp;
 mod store;
 mod theme;
@@ -23,6 +24,7 @@ config: ~/.config/brief/config.toml   cache: ~/.cache/brief/mail.db
 in the app: ? shows every key, Ctrl+K every command";
 
 fn main() -> glib::ExitCode {
+    platform::attach_console();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("-h" | "--help" | "help") => {
@@ -58,12 +60,8 @@ fn main() -> glib::ExitCode {
         }
         _ => {}
     }
-    apple_emoji();
-    // WebKit's DMA-BUF renderer shows blank pages on many NVIDIA + Wayland setups
-    if std::path::Path::new("/proc/driver/nvidia").exists() && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
-    }
-    let app = gtk::Application::builder().application_id("ch.elyesghazel.brief").build();
+    platform::prepare_gui();
+    let app = gtk::Application::builder().application_id("ch.elyesghazel.brief").flags(platform::app_flags()).build();
     app.connect_activate(|app| {
         // single instance: launching again just brings the window back
         if let Some(w) = app.active_window() {
@@ -126,63 +124,4 @@ fn headless_sync() -> glib::ExitCode {
     }
     println!("took {:.1}s", started.elapsed().as_secs_f64());
     if ok { glib::ExitCode::SUCCESS } else { glib::ExitCode::FAILURE }
-}
-
-/// Finds an installed Apple Color Emoji font (ttf-apple-emoji).
-fn apple_emoji_font() -> Option<std::path::PathBuf> {
-    let mut dirs = vec![std::path::PathBuf::from("/usr/share/fonts"), std::path::PathBuf::from("/usr/local/share/fonts")];
-    if let Some(d) = dirs::data_dir() {
-        dirs.push(d.join("fonts"));
-    }
-    if let Some(h) = dirs::home_dir() {
-        dirs.push(h.join(".fonts"));
-    }
-    fn walk(dir: &std::path::Path, depth: u8) -> Option<std::path::PathBuf> {
-        for e in std::fs::read_dir(dir).ok()?.flatten() {
-            let p = e.path();
-            let name = e.file_name().to_string_lossy().to_lowercase();
-            if name.starts_with("applecoloremoji") && (name.ends_with(".ttf") || name.ends_with(".ttc")) {
-                return Some(p);
-            }
-            if depth > 0 && p.is_dir()
-                && let Some(f) = walk(&p, depth - 1) {
-                    return Some(f);
-                }
-        }
-        None
-    }
-    dirs.iter().find_map(|d| walk(d, 3))
-}
-
-/// With Apple Color Emoji installed, brief runs with a private fontconfig that hides the other
-/// color emoji fonts, so fallback (GTK and the HTML view) lands on Apple's. Nothing outside brief
-/// changes. Skipped when FONTCONFIG_FILE is already set.
-fn apple_emoji() {
-    if std::env::var_os("FONTCONFIG_FILE").is_some() || apple_emoji_font().is_none() {
-        return;
-    }
-    let dir = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("brief");
-    let path = dir.join("fonts.conf");
-    let conf = r#"<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
-<!-- written by brief: system fonts, minus the color emoji fonts that are not Apple's -->
-<fontconfig>
-  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
-  <selectfont>
-    <rejectfont>
-      <glob>*NotoColorEmoji*</glob>
-      <glob>*TwitterColorEmoji*</glob>
-      <glob>*Twemoji*</glob>
-      <glob>*JoyPixels*</glob>
-      <glob>*EmojiOne*</glob>
-      <glob>*OpenMoji*</glob>
-    </rejectfont>
-  </selectfont>
-</fontconfig>
-"#;
-    let _ = std::fs::create_dir_all(&dir);
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(conf) && std::fs::write(&path, conf).is_err() {
-        return;
-    }
-    unsafe { std::env::set_var("FONTCONFIG_FILE", &path) };
 }

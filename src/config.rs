@@ -7,7 +7,7 @@ use serde::Deserialize;
 use std::fs;
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(default)]
@@ -23,14 +23,15 @@ pub struct Config {
     pub cache_limit: u32,
     /// Desktop notification (notify-send) for new mail while the window is not focused.
     pub notify: bool,
-    /// Draw no title bar. Hyprland tiles the window anyway.
+    /// Title bar. Off on Linux (Hyprland tiles the window anyway), on on Windows.
     pub decorations: bool,
     /// Render HTML mail in the window (WebKit). false = always show it as text.
     pub html: bool,
     /// Sender icons: "duckduckgo" (the sender sees nothing), "direct" (sharper, asks the
     /// sender's site), "off" (initials only, never online).
     pub favicons: String,
-    /// Command for Ctrl+E in the composer, the file path is appended. Empty = $TERMINAL -e $EDITOR.
+    /// Command for Ctrl+E in the composer, the file path is appended. Empty = $TERMINAL -e $EDITOR
+    /// (Windows: %EDITOR%, else Notepad).
     pub editor: String,
     #[serde(rename = "account")]
     pub accounts: Vec<Account>,
@@ -40,14 +41,14 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             theme: crate::theme::DEFAULT.into(),
-            font: "Inter, Noto Sans, Cantarell, DejaVu Sans, sans-serif".into(),
+            font: crate::platform::FONT.into(),
             font_size: 10.5,
             html: true,
             favicons: "duckduckgo".into(),
             sync_minutes: 5,
             cache_limit: 1000,
             notify: true,
-            decorations: false,
+            decorations: crate::platform::DECORATIONS,
             editor: String::new(),
             accounts: Vec::new(),
         }
@@ -116,11 +117,11 @@ impl Account {
         if self.display_name.is_empty() { &self.name } else { &self.display_name }
     }
 
-    /// password_cmd, then the plain field, then the keyring (secret-tool), then secrets.toml.
+    /// password_cmd, then the plain field, then the keyring (secret-tool or the Windows Credential
+    /// Manager), then secrets.toml.
     pub fn password(&self) -> Result<String, String> {
         if !self.password_cmd.is_empty() {
-            let out = Command::new("sh")
-                .args(["-c", &self.password_cmd])
+            let out = crate::platform::shell(&self.password_cmd)
                 .stderr(Stdio::piped())
                 .output()
                 .map_err(|e| format!("password_cmd: {e}"))?;
@@ -133,11 +134,7 @@ impl Account {
         if !self.password.is_empty() {
             return Ok(self.password.clone());
         }
-        if let Ok(out) = Command::new("secret-tool").args(["lookup", "service", "brief", "account", &self.email]).output()
-            && out.status.success() && !out.stdout.is_empty() {
-                return Ok(String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_owned());
-            }
-        if let Some(pass) = secrets_file_get(&self.email) {
+        if let Some(pass) = crate::platform::keyring_get(&self.email).or_else(|| secrets_file_get(&self.email)) {
             return Ok(pass);
         }
         Err(format!("no password for {} (set password_cmd)", self.email))
@@ -182,7 +179,7 @@ theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # sync_minutes = 5        # full sync interval, the inbox is pushed via IDLE anyway
 # cache_limit = 1000      # newest messages kept offline per folder
 # notify = true
-# decorations = false
+# decorations = false    # title bar, on by default on Windows
 # editor = "kitty -e nvim" # Ctrl+E in the composer
 
 # Add accounts with `A` in the app, or by hand:
@@ -240,19 +237,9 @@ pub fn append_account(acc: &Account) -> std::io::Result<()> {
     f.write_all(acc.to_toml().as_bytes())
 }
 
-/// Stores a password in the keyring via secret-tool. Returns false when there is none.
+/// Stores a password in the keyring. Returns false when there is none.
 pub fn keyring_store(email: &str, pass: &str) -> bool {
-    let child = Command::new("secret-tool")
-        .args(["store", "--label", &format!("brief: {email}"), "service", "brief", "account", email])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    let Ok(mut child) = child else { return false };
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(pass.as_bytes());
-    }
-    child.wait().is_ok_and(|s| s.success())
+    crate::platform::keyring_store(email, pass)
 }
 
 fn secrets_path() -> PathBuf {
@@ -266,12 +253,10 @@ fn secrets_file_get(email: &str) -> Option<String> {
 
 /// Fallback when there is no keyring: `secrets.toml`, mode 0600.
 pub fn secrets_file_store(email: &str, pass: &str) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     let mut table: toml::Table =
         fs::read_to_string(secrets_path()).ok().and_then(|t| t.parse().ok()).unwrap_or_default();
     table.insert(email.to_owned(), toml::Value::String(pass.to_owned()));
-    let mut f = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(secrets_path())?;
-    f.write_all(toml::to_string(&table).unwrap_or_default().as_bytes())
+    crate::platform::write_private(&secrets_path(), toml::to_string(&table).unwrap_or_default().as_bytes())
 }
 
 /// Server presets for well-known providers, else a guess from the domain.

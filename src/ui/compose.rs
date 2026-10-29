@@ -435,21 +435,11 @@ impl App {
         if std::fs::write(&path, b.text(&b.start_iter(), &b.end_iter(), false).as_str()).is_err() {
             return;
         }
-        let cmd = {
-            let cfg = self.cfg.borrow();
-            if cfg.editor.is_empty() {
-                let term = std::env::var("TERMINAL").unwrap_or_else(|_| "kitty".into());
-                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nvim".into());
-                format!("{term} -e {editor}")
-            } else {
-                cfg.editor.clone()
-            }
-        };
-        let full = format!("{cmd} '{}'", path.display().to_string().replace('\'', "'\\''"));
+        let mut cmd = crate::platform::editor(&self.cfg.borrow().editor, &path);
         self.toast("editing in $EDITOR… save and quit to come back", false);
         let (tx, rx) = async_channel::bounded(1);
         std::thread::spawn(move || {
-            let ok = std::process::Command::new("sh").args(["-c", &full]).status().is_ok_and(|s| s.success());
+            let ok = cmd.status().is_ok_and(|s| s.success());
             let _ = tx.send_blocking((ok, std::fs::read_to_string(&path).ok()));
         });
         let app = self.clone();

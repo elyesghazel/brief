@@ -289,7 +289,7 @@ impl App {
             }
             let mut acc = acc;
             if config::keyring_store(&acc.email, &pass) {
-                acc.password_cmd = format!("secret-tool lookup service brief account {}", acc.email);
+                acc.password_cmd = crate::platform::keyring_cmd(&acc.email);
             } else if let Err(e) = config::secrets_file_store(&acc.email, &pass) {
                 app.form.set_status(&format!("could not store the password: {e}"), "form-error");
                 return;

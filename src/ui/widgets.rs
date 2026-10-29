@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Sender;
 
 /// The emoji for a folder role. It renders in whatever color emoji font fontconfig picks, which
-/// is Apple's when ttf-apple-emoji is installed (see `apple_emoji` in main.rs).
+/// is Apple's when ttf-apple-emoji is installed (see `apple_emoji` in platform/unix.rs).
 fn emoji_char(name: &str) -> &'static str {
     match name {
         "inbox" => "📥",

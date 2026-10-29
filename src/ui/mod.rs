@@ -176,21 +176,7 @@ fn long_date(ts: i64) -> String {
     Local.timestamp_opt(ts, 0).single().map(|d| d.format("%a, %-d %b %Y  %H:%M").to_string()).unwrap_or_default()
 }
 
-pub fn notify(summary: &str, body: &str) {
-    let _ = std::process::Command::new("notify-send")
-        .args(["-a", "brief", "-i", "mail-unread", summary, body])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-}
-
-pub fn open_uri(target: &str) {
-    let _ = std::process::Command::new("xdg-open")
-        .arg(target)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-}
+pub use crate::platform::{notify, open as open_uri};
 
 /// Finds http(s) URLs and mailto: links in text, as byte ranges.
 pub fn find_links(text: &str) -> Vec<(usize, usize)> {
@@ -835,7 +821,7 @@ impl App {
     pub fn apply_font(&self) {
         let cfg = self.cfg.borrow();
         // emoji fonts are left out on purpose: named here, Pango takes digits from them too
-        // (Apple's has blank ones); fontconfig fallback finds them anyway, see main::apple_emoji
+        // (Apple's has blank ones); fontconfig fallback finds them anyway, see platform::apple_emoji
         let mut families: Vec<String> = Vec::new();
         let mut generic = "sans-serif";
         for f in cfg.font.split(',').map(str::trim).filter(|f| !f.is_empty() && !f.contains("Emoji")) {
