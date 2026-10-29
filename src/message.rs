@@ -219,9 +219,20 @@ pub fn summary(header: &[u8]) -> Summary {
         cc: list(msg.cc()).join(", "),
         date: msg.date().map(|d| d.to_timestamp()).unwrap_or(0),
         msgid: msg.message_id().map(|m| format!("<{m}>")).unwrap_or_default(),
-        refs: msg.references().map(|r| r.iter().map(|s| format!("<{s}>")).collect::<Vec<_>>().join(" ")).unwrap_or_default(),
+        refs: thread_refs(&msg),
         multipart_mixed: msg.content_type().is_some_and(|c| c.subtype().is_some_and(|s| s.eq_ignore_ascii_case("mixed"))),
     }
+}
+
+/// References plus the In-Reply-To ids it lacks, as `<a> <b>`: what threading links on.
+fn thread_refs(msg: &Message<'_>) -> String {
+    let mut ids: Vec<String> = msg.references().map(|r| r.iter().map(|s| format!("<{s}>")).collect()).unwrap_or_default();
+    for id in msg.in_reply_to().into_iter().flat_map(|r| r.iter().map(|s| format!("<{s}>")).collect::<Vec<_>>()) {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids.join(" ")
 }
 
 /// Preview text and whether the message has real attachments, once the body is fetched.
@@ -290,6 +301,14 @@ Hallo zusammen\r\n> old\r\nsee https://x.ch\r\n--b\r\nContent-Type: text/html\r\
         let s = summary(RAW);
         assert_eq!(s.from_addr, "lea@example.com");
         assert_eq!(s.date, 1_793_091_600);
+    }
+
+    #[test]
+    fn summary_links_in_reply_to() {
+        let s = summary(b"Subject: Re: x\r\nReferences: <a@x> <b@x>\r\nIn-Reply-To: <c@x>\r\n\r\n");
+        assert_eq!(s.refs, "<a@x> <b@x> <c@x>");
+        let s = summary(b"Subject: Re: x\r\nIn-Reply-To: <b@x>\r\n\r\n");
+        assert_eq!(s.refs, "<b@x>");
     }
 }
 

@@ -296,7 +296,7 @@ fn flags_of(flags: &[Flag<'_>]) -> (bool, bool, bool) {
     (flags.contains(&Flag::Seen), flags.contains(&Flag::Flagged), flags.contains(&Flag::Answered))
 }
 
-const HEADER_QUERY: &str = "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID REFERENCES CONTENT-TYPE)])";
+const HEADER_QUERY: &str = "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID REFERENCES IN-REPLY-TO CONTENT-TYPE)])";
 
 pub struct Worker {
     pub idx: usize,
