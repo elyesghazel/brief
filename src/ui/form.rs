@@ -2,7 +2,7 @@
 //! SMTP before anything is saved, the password goes to the keyring (or secrets.toml, 0600).
 
 use super::{App, Mode, label};
-use crate::config::{self, Account, Security, Server};
+use crate::config::{self, Account, Auth, OAuth, Security, Server};
 use crate::{imap, smtp};
 use gtk::glib;
 use gtk::prelude::*;
@@ -197,6 +197,8 @@ impl Form {
             smtp: Server { host: self.smtp_host.text().trim().to_owned(), port: port(&self.smtp_port, "SMTP")?, security: sec(&self.smtp_sec)? },
             password_cmd: String::new(),
             password: String::new(),
+            auth: Auth::Password,
+            oauth: OAuth::default(),
             signature: String::new(),
             color: String::new(),
         })

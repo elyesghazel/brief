@@ -4,6 +4,7 @@
 //! the `theme = ` line, adding an account appends an `[[account]]` block.
 
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -35,6 +36,8 @@ pub struct Config {
     pub editor: String,
     #[serde(rename = "account")]
     pub accounts: Vec<Account>,
+    /// OAuth app per provider (`[oauth.google]`, `[oauth.microsoft]`), shared by its accounts.
+    pub oauth: HashMap<String, OAuth>,
 }
 
 impl Default for Config {
@@ -51,6 +54,7 @@ impl Default for Config {
             decorations: crate::platform::DECORATIONS,
             editor: String::new(),
             accounts: Vec::new(),
+            oauth: HashMap::new(),
         }
     }
 }
@@ -74,6 +78,11 @@ pub struct Account {
     /// Plain password. Prefer password_cmd or the keyring.
     #[serde(default)]
     pub password: String,
+    /// "password" (default) or "oauth2" (browser sign-in, SASL XOAUTH2).
+    #[serde(default)]
+    pub auth: Auth,
+    #[serde(default)]
+    pub oauth: OAuth,
     #[serde(default)]
     pub signature: String,
     /// Dot in the unified inbox and the sidebar, e.g. "#f9e2af". Empty = accent.
@@ -87,6 +96,47 @@ pub struct Server {
     pub port: u16,
     #[serde(default)]
     pub security: Security,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Auth {
+    #[default]
+    Password,
+    Oauth2,
+}
+
+/// OAuth app settings. Empty fields fall back to `[oauth.<provider>]`, then to the built-in
+/// defaults of the provider (see `oauth::Provider`).
+#[derive(Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct OAuth {
+    /// "google", "microsoft", or "custom" (then auth_url, token_url and scope are needed).
+    pub provider: String,
+    pub client_id: String,
+    /// Only for providers that want one; Google does for desktop apps.
+    pub client_secret: String,
+    pub auth_url: String,
+    pub token_url: String,
+    /// Space-separated scopes.
+    pub scope: String,
+}
+
+impl OAuth {
+    /// Fills empty fields from `other`.
+    fn fill(&mut self, other: &OAuth) {
+        for (mine, theirs) in [
+            (&mut self.client_id, &other.client_id),
+            (&mut self.client_secret, &other.client_secret),
+            (&mut self.auth_url, &other.auth_url),
+            (&mut self.token_url, &other.token_url),
+            (&mut self.scope, &other.scope),
+        ] {
+            if mine.is_empty() {
+                mine.clone_from(theirs);
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -115,6 +165,22 @@ impl Account {
 
     pub fn from_name(&self) -> &str {
         if self.display_name.is_empty() { &self.name } else { &self.display_name }
+    }
+
+    pub fn is_oauth(&self) -> bool {
+        self.auth == Auth::Oauth2
+    }
+
+    /// What the servers get: the password, or a current OAuth access token.
+    pub fn secret(&self) -> Result<String, String> {
+        if self.is_oauth() { crate::oauth::access_token(self) } else { self.password() }
+    }
+
+    /// The OAuth refresh token from the keyring, else from secrets.toml.
+    pub fn refresh_token(&self) -> Result<String, String> {
+        crate::platform::keyring_get(OAUTH_SERVICE, &self.email)
+            .or_else(|| secrets_file_get(&oauth_key(&self.email)))
+            .ok_or_else(|| format!("{} is not signed in: run `brief login {}`", self.email, self.name))
     }
 
     /// password_cmd, then the plain field, then the keyring (secret-tool or the Windows Credential
@@ -157,6 +223,17 @@ impl Account {
         if !self.password_cmd.is_empty() {
             out += &format!("password_cmd = {}\n", q(&self.password_cmd));
         }
+        if self.is_oauth() {
+            out += "auth = \"oauth2\"\n";
+            let o = &self.oauth;
+            let mut fields = vec![format!("provider = {}", q(&o.provider))];
+            for (k, v) in [("client_id", &o.client_id), ("client_secret", &o.client_secret), ("auth_url", &o.auth_url), ("token_url", &o.token_url), ("scope", &o.scope)] {
+                if !v.is_empty() {
+                    fields.push(format!("{k} = {}", q(v)));
+                }
+            }
+            out += &format!("oauth = {{ {} }}\n", fields.join(", "));
+        }
         out
     }
 }
@@ -193,6 +270,21 @@ theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # password_cmd = "secret-tool lookup service brief account me@example.com"
 # signature = "-- \nMe"
 # color = "#f9e2af"
+#
+# Gmail / Outlook can sign in through the browser instead (Ctrl+O in the form, or `brief login
+# <name>`), with your own OAuth client id:
+#
+# [oauth.google]
+# client_id = "1234-abc.apps.googleusercontent.com"
+# client_secret = "GOCSPX-..."
+#
+# [[account]]
+# name = "Gmail"
+# email = "me@gmail.com"
+# imap = { host = "imap.gmail.com", port = 993, security = "tls" }
+# smtp = { host = "smtp.gmail.com", port = 465, security = "tls" }
+# auth = "oauth2"
+# oauth = { provider = "google" }
 "##;
 
 /// Loads the config, writing the commented template on first start.
@@ -203,7 +295,31 @@ pub fn load() -> Result<Config, String> {
         let _ = fs::write(&path, TEMPLATE);
     }
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+    let mut cfg: Config = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    for i in 0..cfg.accounts.len() {
+        let acc = cfg.accounts[i].clone();
+        cfg.accounts[i] = cfg.resolve_oauth(acc);
+    }
+    Ok(cfg)
+}
+
+impl Config {
+    /// Completes an OAuth account's settings from `[oauth.<provider>]` and the built-in defaults.
+    pub fn resolve_oauth(&self, mut acc: Account) -> Account {
+        if !acc.is_oauth() {
+            return acc;
+        }
+        if acc.oauth.provider.is_empty() {
+            acc.oauth.provider = crate::oauth::guess_provider(&acc.email, &acc.imap.host).unwrap_or("custom").into();
+        }
+        if let Some(shared) = self.oauth.get(&acc.oauth.provider) {
+            acc.oauth.fill(shared);
+        }
+        if let Some(p) = crate::oauth::Provider::from_name(&acc.oauth.provider) {
+            acc.oauth.fill(&p.defaults());
+        }
+        acc
+    }
 }
 
 /// Replaces (or adds) the top-level `theme = ` line.
@@ -237,9 +353,25 @@ pub fn append_account(acc: &Account) -> std::io::Result<()> {
     f.write_all(acc.to_toml().as_bytes())
 }
 
+/// Keyring service for OAuth refresh tokens, apart from the passwords.
+const OAUTH_SERVICE: &str = "brief-oauth";
+
+/// secrets.toml key for a refresh token.
+fn oauth_key(email: &str) -> String {
+    format!("oauth:{email}")
+}
+
 /// Stores a password in the keyring. Returns false when there is none.
 pub fn keyring_store(email: &str, pass: &str) -> bool {
     crate::platform::keyring_store("brief", email, pass)
+}
+
+/// Stores an OAuth refresh token: the keyring, else secrets.toml.
+pub fn store_refresh_token(email: &str, token: &str) -> Result<(), String> {
+    if crate::platform::keyring_store(OAUTH_SERVICE, email, token) {
+        return Ok(());
+    }
+    secrets_file_store(&oauth_key(email), token).map_err(|e| format!("could not store the sign-in: {e}"))
 }
 
 fn secrets_path() -> PathBuf {
@@ -297,6 +429,8 @@ mod tests {
             smtp,
             password_cmd: "pass mail/gmail".into(),
             password: String::new(),
+            auth: Auth::Password,
+            oauth: OAuth::default(),
             signature: String::new(),
             color: String::new(),
         };
@@ -304,6 +438,72 @@ mod tests {
         assert_eq!(cfg.accounts[0].name, "Gmail \"x\"");
         assert_eq!(cfg.accounts[0].smtp.port, 465);
         assert_eq!(cfg.accounts[0].password_cmd, "pass mail/gmail");
+        assert_eq!(cfg.accounts[0].auth, Auth::Password);
+    }
+
+    #[test]
+    fn oauth_block_round_trips() {
+        let (imap, smtp) = guess_servers("me@outlook.com");
+        let acc = Account {
+            name: "Outlook".into(),
+            email: "me@outlook.com".into(),
+            display_name: String::new(),
+            user: String::new(),
+            imap,
+            smtp,
+            password_cmd: String::new(),
+            password: String::new(),
+            auth: Auth::Oauth2,
+            oauth: OAuth { provider: "microsoft".into(), client_id: "abc".into(), ..Default::default() },
+            signature: String::new(),
+            color: String::new(),
+        };
+        let toml = acc.to_toml();
+        assert!(toml.contains("oauth = { provider = \"microsoft\", client_id = \"abc\" }"));
+        let cfg: Config = toml::from_str(&toml).unwrap();
+        assert!(cfg.accounts[0].is_oauth());
+        assert_eq!(cfg.accounts[0].oauth, acc.oauth);
+    }
+
+    #[test]
+    fn oauth_settings_resolve() {
+        let cfg: Config = toml::from_str(
+            r#"
+[oauth.google]
+client_id = "shared-id"
+client_secret = "shared-secret"
+
+[[account]]
+name = "A"
+email = "a@gmail.com"
+imap = { host = "imap.gmail.com", port = 993 }
+smtp = { host = "smtp.gmail.com", port = 465 }
+auth = "oauth2"
+
+[[account]]
+name = "B"
+email = "b@gmail.com"
+imap = { host = "imap.gmail.com", port = 993 }
+smtp = { host = "smtp.gmail.com", port = 465 }
+auth = "oauth2"
+oauth = { provider = "google", client_id = "own-id" }
+
+[[account]]
+name = "C"
+email = "c@example.com"
+imap = { host = "mail.example.com", port = 993 }
+smtp = { host = "mail.example.com", port = 587 }
+"#,
+        )
+        .unwrap();
+        let accs: Vec<Account> = cfg.accounts.iter().map(|a| cfg.resolve_oauth(a.clone())).collect();
+        assert_eq!(accs[0].oauth.provider, "google");
+        assert_eq!(accs[0].oauth.client_id, "shared-id");
+        assert_eq!(accs[0].oauth.scope, "https://mail.google.com/");
+        assert_eq!(accs[1].oauth.client_id, "own-id");
+        assert_eq!(accs[1].oauth.client_secret, "shared-secret");
+        assert!(!accs[2].is_oauth());
+        assert_eq!(accs[2].oauth, OAuth::default());
     }
 
     #[test]

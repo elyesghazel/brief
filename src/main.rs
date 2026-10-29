@@ -7,6 +7,7 @@ mod avatar;
 mod config;
 mod imap;
 mod message;
+mod oauth;
 mod platform;
 mod smtp;
 mod store;
