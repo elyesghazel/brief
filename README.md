@@ -3,7 +3,7 @@
 **A keyboard-first mail client for Hyprland.** Rust and GTK4, no Electron, no web stack.
 
 Several IMAP/SMTP accounts from different servers in one window, a unified inbox, vim-style
-keys, a command palette, twelve live-switchable themes and HTML mail rendered with tracking
+keys, a command palette, fourteen live-switchable themes and HTML mail rendered with tracking
 blocked. It opens instantly because everything is cached locally.
 
 ```
@@ -117,7 +117,9 @@ Composer: `Ctrl+Enter` send, `Ctrl+E` edit in `$EDITOR`, `Ctrl+O` attach, `Ctrl+
 ## Themes
 
 `graphite` (default), `catppuccin-mocha`, `catppuccin-latte`, `rose-pine`, `rose-pine-dawn`,
-`gruvbox-dark`, `tokyo-night`, `nord`, `everforest-dark`, `dracula`, `kanagawa`, `one-dark`.
+`gruvbox-dark`, `tokyo-night`, `nord`, `everforest-dark`, `dracula`, `kanagawa`, `one-dark`,
+and `eg` / `eg-light`: plain black and white with JetBrains Mono for the chrome, after the
+[elyesghazel.ch](https://elyesghazel.ch) design kit.
 Press `t` to switch with a live preview; the choice is saved.
 
 Your own: `~/.config/brief/themes/<name>.css` with `@define-color` lines for
