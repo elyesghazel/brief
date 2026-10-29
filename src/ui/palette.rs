@@ -322,7 +322,7 @@ impl App {
             .enumerate()
             .map(|(i, l)| {
                 let u = l.clone();
-                item(l, format!("{}", i + 1), move |_| open_uri(&u))
+                item(l, format!("{}", i + 1), move |a| a.open_link(&u))
             })
             .collect();
         self.open_palette("open link", items, "", None);

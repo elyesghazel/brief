@@ -9,18 +9,26 @@ mod imp {
     use gtk::prelude::*;
     use gtk::{gdk, gio};
     use std::cell::RefCell;
+    use std::rc::Rc;
     use webkit6::prelude::*;
 
     pub const AVAILABLE: bool = true;
 
-    #[derive(Default)]
+    type LinkFn = Rc<dyn Fn(&str)>;
+
     pub struct Html {
         view: RefCell<Option<webkit6::WebView>>,
+        on_link: RefCell<LinkFn>,
     }
 
     impl Html {
         pub fn new() -> Html {
-            Html::default()
+            Html { view: RefCell::new(None), on_link: RefCell::new(Rc::new(|uri: &str| open_uri(uri))) }
+        }
+
+        /// What a clicked link does; the browser until set.
+        pub fn on_link(&self, f: impl Fn(&str) + 'static) {
+            *self.on_link.borrow_mut() = Rc::new(f);
         }
 
         /// Shows `html` in `paper`, making the view on first use.
@@ -42,7 +50,7 @@ mod imp {
             }
         }
 
-        /// The WebKit view: ephemeral session, no page scripts, links open outside.
+        /// The WebKit view: ephemeral session, no page scripts, links go to `on_link`.
         fn view(&self, paper: &gtk::Box) -> webkit6::WebView {
             if let Some(w) = self.view.borrow().as_ref() {
                 return w.clone();
@@ -65,7 +73,8 @@ mod imp {
             }
             web.set_background_color(&gdk::RGBA::new(1.0, 1.0, 1.0, 1.0));
             web.set_vexpand(true);
-            web.connect_decide_policy(|_, decision, kind| {
+            let on_link = self.on_link.borrow().clone();
+            web.connect_decide_policy(move |_, decision, kind| {
                 match kind {
                     webkit6::PolicyDecisionType::NavigationAction | webkit6::PolicyDecisionType::NewWindowAction => {
                         let Some(nav) = decision.downcast_ref::<webkit6::NavigationPolicyDecision>() else { return false };
@@ -76,7 +85,7 @@ mod imp {
                         }
                         // every real navigation goes to the browser; the view never leaves the mail
                         if action.navigation_type() == webkit6::NavigationType::LinkClicked || kind == webkit6::PolicyDecisionType::NewWindowAction {
-                            open_uri(&uri);
+                            on_link(&uri);
                         }
                         decision.ignore();
                         true
@@ -119,6 +128,8 @@ mod imp {
         pub fn new() -> Html {
             Html
         }
+
+        pub fn on_link(&self, _f: impl Fn(&str) + 'static) {}
 
         pub fn load(&self, _paper: &gtk::Box, _html: &str, _zoom: f64) {}
 

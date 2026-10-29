@@ -45,6 +45,7 @@ pub struct Reader {
     pub remote_ok: RefCell<Option<Key>>,
     zoom: Cell<f64>,
     buttons: Vec<(gtk::Button, &'static str)>,
+    app: RefCell<std::rc::Weak<App>>,
 }
 
 impl Reader {
@@ -231,10 +232,17 @@ impl Reader {
             remote_ok: RefCell::new(None),
             zoom: Cell::new(1.0),
             buttons,
+            app: RefCell::new(std::rc::Weak::new()),
         }
     }
 
     pub fn wire(&self, app: &Rc<App>) {
+        *self.app.borrow_mut() = Rc::downgrade(app);
+        let me = Rc::downgrade(app);
+        self.web.on_link(move |uri| match me.upgrade() {
+            Some(app) => app.open_link(uri),
+            None => open_uri(uri),
+        });
         for (b, action) in &self.buttons {
             let me = Rc::downgrade(app);
             let action = *action;
@@ -282,6 +290,7 @@ impl Reader {
         // links in text mail open on click
         let click = gtk::GestureClick::new();
         let tv = self.body.clone();
+        let me = Rc::downgrade(app);
         click.connect_released(move |g, _, x, y| {
             if tv.buffer().has_selection() {
                 return;
@@ -294,7 +303,9 @@ impl Reader {
                 let mut end = iter;
                 start.backward_to_tag_toggle(Some(&tag));
                 end.forward_to_tag_toggle(Some(&tag));
-                open_uri(tv.buffer().text(&start, &end, false).as_str());
+                if let Some(app) = me.upgrade() {
+                    app.open_link(tv.buffer().text(&start, &end, false).as_str());
+                }
                 g.set_state(gtk::EventSequenceState::Claimed);
             }
         });
