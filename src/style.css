@@ -118,6 +118,15 @@ listview.msgs > row:selected { background: alpha(@accent, 0.14); }
 .msg-date  { color: @faint; font-size: 0.86em; margin-left: 10px; }
 .msg.unread .msg-date { color: @accent; font-weight: bold; }
 .msg-flags { font-size: 0.85em; margin-left: 6px; }
+.msg-count {
+  color: @faint;
+  font-size: 0.78em;
+  border: 1px solid alpha(@ghost, 0.9);
+  border-radius: 2px;
+  padding: 0 5px;
+  margin-left: 7px;
+}
+.msg.unread .msg-count { color: @fg; border-color: alpha(@accent, 0.6); }
 .msg-subject { color: @muted; margin-top: 2px; }
 .msg.unread .msg-subject { color: @fg; font-weight: 600; }
 .msg-preview { color: @faint; margin-top: 2px; font-size: 0.92em; }
@@ -129,7 +138,8 @@ listview.msgs > row:selected { background: alpha(@accent, 0.14); }
 .empty-title { color: @muted; font-weight: bold; font-size: 1.25em; margin: 10px 0 6px; }
 
 /* reader */
-.reader-head { padding: 22px 28px 10px; }
+.reader-top  { padding: 22px 28px 0; }
+.reader-head { padding: 0 28px 10px; }
 .r-subject { color: @fg; font-weight: 800; font-size: 1.45em; margin-bottom: 14px; }
 .r-who     { margin-bottom: 12px; }
 .r-from    { color: @fg; font-weight: bold; }
@@ -141,6 +151,21 @@ button.tool { padding: 4px 10px; }
 button.tool.on image { color: @yellow; }
 .tool-sep { margin: 4px 6px; background: alpha(@ghost, 0.8); min-width: 1px; }
 .r-note    { color: @faint; padding: 6px 28px 0; font-size: 0.9em; }
+
+/* conversation: the other messages, one line each */
+.conv { padding: 0 16px; margin-bottom: 10px; }
+.conv-newer .conv { margin: 8px 0 10px; }
+.conv-newer { border-top: 1px solid alpha(@ghost, 0.6); }
+.conv-line { padding: 7px 12px 7px 0; border-radius: 3px; border-bottom: 1px solid alpha(@ghost, 0.45); }
+.conv-line:hover { background: alpha(@ghost, 0.28); }
+.conv-dot  { color: transparent; font-size: 0.6em; min-width: 12px; }
+.conv-line.unread .conv-dot { color: @accent; }
+.conv-line .avatar { min-width: 24px; min-height: 24px; margin-right: 10px; }
+.conv-line .avatar-initials { font-size: 0.68em; }
+.conv-from { color: @muted; margin-right: 12px; }
+.conv-line.unread .conv-from { color: @fg; font-weight: bold; }
+.conv-snippet { color: @faint; font-size: 0.94em; }
+.conv-date { color: @faint; font-size: 0.86em; margin-left: 12px; }
 
 .banner {
   margin: 10px 24px 0;

@@ -1,10 +1,12 @@
 //! The reading pane: header with avatar and actions, the remote content banner, attachment chips,
 //! and the body - HTML in a WebKit view (scripts off, remote loads blocked by a CSP until allowed)
-//! or text in a TextView. Without WebKit (Windows) HTML mail shows as text.
+//! or text in a TextView. Without WebKit (Windows) HTML mail shows as text. A conversation shows
+//! as an accordion: the other messages collapse to one line each above and below the open one,
+//! which keeps a single body view.
 
 use super::web::{self, Html};
 use super::widgets::{Avatar, emoji, icon_button};
-use super::{App, Key, find_links, human_size, key, label, long_date, open_uri};
+use super::{App, Key, find_links, human_size, key, label, long_date, open_uri, short_date};
 use crate::avatar;
 use crate::imap::Cmd;
 use crate::message::{self, Parsed};
@@ -18,6 +20,10 @@ use std::time::Duration;
 pub struct Reader {
     pub root: gtk::Stack,
     subject: gtk::Label,
+    older: gtk::Box,
+    older_scroll: gtk::ScrolledWindow,
+    newer: gtk::Box,
+    newer_scroll: gtk::ScrolledWindow,
     avatar: Avatar,
     from: gtk::Label,
     addr: gtk::Label,
@@ -43,14 +49,32 @@ pub struct Reader {
 
 impl Reader {
     pub fn new() -> Reader {
-        let head = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        head.add_css_class("reader-head");
+        let top = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        top.add_css_class("reader-top");
         let subject = label("", "r-subject");
         subject.set_wrap(true);
         subject.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         subject.set_selectable(true);
         subject.set_focusable(false);
-        head.append(&subject);
+        top.append(&subject);
+        // collapsed messages of a conversation, before and after the open one
+        let strip = |max: i32| {
+            let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            b.add_css_class("conv");
+            let sc = gtk::ScrolledWindow::builder()
+                .child(&b)
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .propagate_natural_height(true)
+                .max_content_height(max)
+                .build();
+            sc.set_visible(false);
+            (b, sc)
+        };
+        let (older, older_scroll) = strip(195);
+        let (newer, newer_scroll) = strip(117);
+        newer_scroll.add_css_class("conv-newer");
+        let head = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        head.add_css_class("reader-head");
 
         let who = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         who.add_css_class("r-who");
@@ -155,11 +179,14 @@ impl Reader {
         content.add_named(&paper, Some("html"));
 
         let msg = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        msg.append(&top);
+        msg.append(&older_scroll);
         msg.append(&head);
         msg.append(&banner);
         msg.append(&chips_scroll);
         msg.append(&note);
         msg.append(&content);
+        msg.append(&newer_scroll);
 
         let empty = gtk::Box::new(gtk::Orientation::Vertical, 6);
         empty.add_css_class("empty");
@@ -180,6 +207,10 @@ impl Reader {
         Reader {
             root,
             subject,
+            older,
+            older_scroll,
+            newer,
+            newer_scroll,
             avatar,
             from,
             addr,
@@ -226,6 +257,28 @@ impl Reader {
             });
         }
 
+        // a collapsed message opens on click
+        for strip in [&self.older, &self.newer] {
+            let click = gtk::GestureClick::new();
+            let me = Rc::downgrade(app);
+            let bx = strip.clone();
+            click.connect_released(move |_, _, x, y| {
+                let Some(app) = me.upgrade() else { return };
+                let mut w = bx.pick(x, y, gtk::PickFlags::DEFAULT);
+                while let Some(cur) = w.clone() {
+                    if cur.parent().as_ref() == Some(bx.upcast_ref()) {
+                        break;
+                    }
+                    w = cur.parent();
+                }
+                if let Some(i) = w.and_then(|w| w.widget_name().strip_prefix("conv-").and_then(|i| i.parse().ok())) {
+                    // the lines get rebuilt; not while the click is still being handled on them
+                    glib::idle_add_local_once(move || app.conv_focus(i));
+                }
+            });
+            strip.add_controller(click);
+        }
+
         // links in text mail open on click
         let click = gtk::GestureClick::new();
         let tv = self.body.clone();
@@ -264,7 +317,95 @@ impl Reader {
 impl App {
     pub fn clear_reader(&self) {
         *self.current.borrow_mut() = None;
+        self.conv.borrow_mut().clear();
         self.rd.root.set_visible_child_name("empty");
+    }
+
+    /// Opens a conversation (oldest first) on its first unread message, else the newest.
+    pub fn show_conversation(self: &Rc<Self>, msgs: Vec<Row>) {
+        let Some(last) = msgs.len().checked_sub(1) else { return self.clear_reader() };
+        let row = msgs[msgs.iter().position(|r| !r.seen).unwrap_or(last)].clone();
+        *self.conv.borrow_mut() = msgs;
+        self.show_message(row);
+    }
+
+    /// `n` / `p`: the next or previous message of the open conversation.
+    pub fn conv_step(self: &Rc<Self>, delta: i64) {
+        let cur = self.current.borrow().as_ref().map(|(r, _)| key(r));
+        let pos = cur.and_then(|k| self.conv.borrow().iter().position(|r| key(r) == k));
+        let Some(pos) = pos else { return };
+        let n = self.conv.borrow().len() as i64;
+        let next = (pos as i64 + delta).clamp(0, n - 1) as usize;
+        if next != pos {
+            self.conv_focus(next);
+        }
+    }
+
+    pub fn conv_focus(self: &Rc<Self>, i: usize) {
+        let row = self.conv.borrow().get(i).cloned();
+        if let Some(row) = row {
+            self.show_message(row);
+        }
+    }
+
+    /// Fills the collapsed lines around the open message of the conversation.
+    pub fn render_conv(&self) {
+        let rd = &self.rd;
+        for b in [&rd.older, &rd.newer] {
+            while let Some(c) = b.first_child() {
+                b.remove(&c);
+            }
+        }
+        let conv = self.conv.borrow();
+        let cur = self.current.borrow().as_ref().map(|(r, _)| key(r));
+        let pos = cur.and_then(|k| conv.iter().position(|r| key(r) == k)).filter(|_| conv.len() > 1);
+        rd.older_scroll.set_visible(pos.is_some_and(|p| p > 0));
+        rd.newer_scroll.set_visible(pos.is_some_and(|p| p + 1 < conv.len()));
+        if let Some(p) = pos {
+            let me = self.my_addrs();
+            for (i, r) in conv.iter().enumerate().filter(|(i, _)| *i != p) {
+                let line = self.conv_line(r, me.contains(&r.from_addr.to_lowercase()));
+                line.set_widget_name(&format!("conv-{i}"));
+                if i < p { &rd.older } else { &rd.newer }.append(&line);
+            }
+            // the closest older message stays in sight
+            let adj = rd.older_scroll.vadjustment();
+            glib::idle_add_local_once(move || adj.set_value(adj.upper()));
+        }
+        drop(conv);
+        self.update_hints();
+    }
+
+    /// One collapsed message: sender, snippet, date.
+    fn conv_line(&self, r: &Row, mine: bool) -> gtk::Box {
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        line.add_css_class("conv-line");
+        if !r.seen {
+            line.add_css_class("unread");
+        }
+        line.append(&label("●", "conv-dot"));
+        let av = Avatar::new(24);
+        av.root.set_valign(gtk::Align::Center);
+        av.set(&self.icons, &r.from_name, &r.from_addr);
+        line.append(&av.root);
+        let name = if mine {
+            "me"
+        } else if r.from_name.is_empty() {
+            &r.from_addr
+        } else {
+            &r.from_name
+        };
+        let from = label(name, "conv-from");
+        from.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        from.set_max_width_chars(22);
+        line.append(&from);
+        let snippet = label(if r.preview.is_empty() { &r.subject } else { &r.preview }, "conv-snippet");
+        snippet.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        snippet.set_hexpand(true);
+        snippet.set_width_chars(1);
+        line.append(&snippet);
+        line.append(&label(&short_date(r.date), "conv-date"));
+        line
     }
 
     pub fn show_message(self: &Rc<Self>, row: Row) {
@@ -286,7 +427,8 @@ impl App {
         }
         let rd = &self.rd;
         rd.root.set_visible_child_name("msg");
-        rd.subject.set_text(&row.subject);
+        let subject = self.conv.borrow().first().map(|r| r.subject.clone());
+        rd.subject.set_text(subject.as_deref().unwrap_or(&row.subject));
         rd.from.set_text(if row.from_name.is_empty() { &row.from_addr } else { &row.from_name });
         rd.addr.set_text(if row.from_name.is_empty() { "" } else { &row.from_addr });
         rd.date.set_text(&long_date(row.date));
@@ -360,17 +502,20 @@ impl App {
         if !same {
             rd.scroll.vadjustment().set_value(0.0);
         }
-        let unseen = !row.seen;
+        let unseen = !row.seen || self.conv.borrow().iter().any(|r| !r.seen);
         *self.current.borrow_mut() = Some((row.clone(), parsed));
+        self.render_conv();
         if unseen {
-            // read after a short look, so skimming with j/k does not mark everything
+            // read after a short look, so skimming with j/k does not mark everything; a
+            // conversation goes read as a whole
             let me = Rc::downgrade(self);
             let k = key(&row);
             glib::timeout_add_local_once(Duration::from_millis(700), move || {
                 let Some(app) = me.upgrade() else { return };
                 let still = app.current.borrow().as_ref().is_some_and(|(r, _)| key(r) == k);
                 if still {
-                    app.set_seen(&[row], true);
+                    let conv: Vec<Row> = app.conv.borrow().iter().filter(|r| !r.seen).cloned().collect();
+                    app.set_seen(if conv.is_empty() { std::slice::from_ref(&row) } else { &conv }, true);
                 }
             });
         }

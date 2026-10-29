@@ -14,6 +14,7 @@ use crate::imap::{self, Cmd, Event};
 use crate::message::{self, Parsed};
 use crate::store::{Folder, Row, Store, View};
 use crate::theme;
+use crate::thread::{self, Conv};
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use std::cell::{Cell, RefCell};
@@ -85,6 +86,11 @@ pub struct App {
     empty_title: gtk::Label,
     empty_text: gtk::Label,
     pub rows: RefCell<Vec<Row>>,
+    /// In thread mode the messages behind each list row, parallel to `rows`; empty otherwise.
+    convs: RefCell<Vec<Conv>>,
+    mates: RefCell<thread::Mates>,
+    /// The conversation open in the reader, oldest first; empty for a single message.
+    pub conv: RefCell<Vec<Row>>,
     pub view: RefCell<View>,
     pub marked: RefCell<HashSet<Key>>,
     reload_pending: Cell<bool>,
@@ -316,7 +322,16 @@ pub fn build(app: &gtk::Application) {
         text.set_hexpand(true);
         text.add_css_class("msg-text");
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        top.append(ellipsize(&label("", "msg-from")));
+        let from = ellipsize(&label("", "msg-from")).clone();
+        // the count sits right after the names, so the names do not take the slack
+        from.set_hexpand(false);
+        top.append(&from);
+        let count = label("", "msg-count");
+        count.set_valign(gtk::Align::Center);
+        top.append(&count);
+        let slack = label("", "");
+        slack.set_hexpand(true);
+        top.append(&slack);
         top.append(&label("", "msg-flags"));
         top.append(&label("", "msg-date"));
         text.append(&top);
@@ -451,6 +466,9 @@ pub fn build(app: &gtk::Application) {
         empty_title,
         empty_text,
         rows: RefCell::new(Vec::new()),
+        convs: RefCell::new(Vec::new()),
+        mates: RefCell::new(thread::Mates::default()),
+        conv: RefCell::new(Vec::new()),
         view: RefCell::new(View::Unified),
         marked: RefCell::new(HashSet::new()),
         reload_pending: Cell::new(false),
@@ -534,12 +552,7 @@ impl App {
             if app.quiet.get() {
                 return;
             }
-            let i = sel.selected();
-            let row = app.rows.borrow().get(i as usize).cloned();
-            match row {
-                Some(r) => app.show_message(r),
-                None => app.clear_reader(),
-            }
+            app.open_row(sel.selected() as usize);
         });
         let me = Rc::downgrade(self);
         self.list_view.connect_activate(move |_, _| {
@@ -724,7 +737,13 @@ impl App {
                     View::Unified => self.folder_with_role(acct, "inbox").as_deref() == Some(folder.as_str()),
                     View::Folder { acct: a, folder: f } => *a == name && *f == folder,
                 };
-                if relevant {
+                // conversations take messages from these too
+                let mates = self.threads()
+                    && ["inbox", "sent", "archive"].iter().any(|r| self.folder_with_role(acct, r).as_deref() == Some(folder.as_str()));
+                if mates && !relevant {
+                    self.mates.borrow_mut().clear();
+                }
+                if relevant || mates {
                     self.schedule_reload();
                 }
             }
@@ -860,7 +879,7 @@ impl App {
         self.update_hints();
     }
 
-    fn update_hints(&self) {
+    pub fn update_hints(&self) {
         while let Some(c) = self.hints.first_child() {
             self.hints.remove(&c);
         }
@@ -875,6 +894,9 @@ impl App {
             (Mode::Compose, _) => &[("Ctrl+Enter", "send"), ("Ctrl+E", "editor"), ("Ctrl+O", "attach"), ("Esc", "close")],
             (Mode::Normal, Pane::Side) => &[("j k", "folders"), ("l", "messages"), ("?", "keys")],
             (Mode::Normal, Pane::List) => &[("j k", "move"), ("Enter", "read"), ("c", "write"), ("Ctrl+K", "commands"), ("?", "keys")],
+            (Mode::Normal, Pane::Reader) if self.conv.borrow().len() > 1 => {
+                &[("j k", "scroll"), ("n p", "messages"), ("r", "reply"), ("I", "load images"), ("h", "back"), ("?", "keys")]
+            }
             (Mode::Normal, Pane::Reader) => &[("j k", "scroll"), ("r", "reply"), ("I", "load images"), ("h", "back"), ("?", "keys")],
         };
         for (k, d) in list {
@@ -1093,39 +1115,142 @@ impl App {
         let t0 = std::time::Instant::now();
         let query = self.search.text().to_string();
         let limit = self.cfg.borrow().cache_limit.max(200) * if *self.view.borrow() == View::Unified { 2 } else { 1 };
-        let rows = self.store.borrow().list(&self.view.borrow(), &query, limit);
-        let built = t0.elapsed();
-        let selected = self.rows.borrow().get(self.list_sel.selected() as usize).map(key);
-        let same = {
-            let old = self.rows.borrow();
-            old.len() == rows.len()
-                && old.iter().zip(&rows).all(|(a, b)| {
-                    key(a) == key(b) && a.seen == b.seen && a.flagged == b.flagged && a.preview == b.preview && a.attach == b.attach
-                })
+        let view = self.view.borrow().clone();
+        let (rows, convs) = {
+            let store = self.store.borrow();
+            let rows = store.list(&view, &query, limit);
+            if self.threads() {
+                let mut mates = self.mates.borrow_mut();
+                mates.fill(&store, &view, &rows);
+                thread::conversations(rows, &mates.rows, &self.my_addrs())
+            } else {
+                (rows, Vec::new())
+            }
         };
-        if same {
+        let built = t0.elapsed();
+        let selected = self.selected_keys();
+        let same_keys = {
+            let old = self.rows.borrow();
+            old.len() == rows.len() && old.iter().zip(&rows).all(|(a, b)| key(a) == key(b))
+        };
+        let changed: Vec<usize> = if same_keys {
+            let old = self.rows.borrow();
+            (0..rows.len())
+                .filter(|&i| {
+                    let (a, b) = (&old[i], &rows[i]);
+                    a.seen != b.seen
+                        || a.flagged != b.flagged
+                        || a.preview != b.preview
+                        || a.attach != b.attach
+                        || a.count != b.count
+                        || a.people != b.people
+                        || a.subject != b.subject
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        *self.convs.borrow_mut() = convs;
+        if same_keys {
+            // same rows: rebind only what changed, the scroll position stays
+            *self.rows.borrow_mut() = rows;
+            self.refresh_at(&changed);
+            self.sync_conv();
             self.update_empty();
             return;
         }
         let n = rows.len();
         let objs: Vec<glib::BoxedAnyObject> = rows.iter().cloned().map(glib::BoxedAnyObject::new).collect();
         *self.rows.borrow_mut() = rows;
-        let new_pos = selected.and_then(|k| self.rows.borrow().iter().position(|r| key(r) == k));
+        let new_pos = self.find_row(&selected);
         self.quiet.set(true);
         self.list_model.splice(0, self.list_model.n_items(), &objs);
         self.list_sel.set_selected(new_pos.map_or(gtk::INVALID_LIST_POSITION, |p| p as u32));
         self.quiet.set(false);
         if new_pos.is_none() && self.current.borrow().is_some() {
             // the open message left this view (moved or deleted elsewhere)
-            let still = self.current.borrow().as_ref().is_some_and(|(r, _)| self.rows.borrow().iter().any(|x| key(x) == key(r)));
-            if !still {
+            let cur = self.current.borrow().as_ref().map(|(r, _)| key(r));
+            if self.find_row(&cur.into_iter().collect::<Vec<_>>()).is_none() {
                 self.clear_reader();
             }
         }
+        self.sync_conv();
         self.update_empty();
         if std::env::var_os("BRIEF_DEBUG_LIST").is_some() {
             eprintln!("list {n} rows: built {built:?}, shown {:?}", t0.elapsed());
         }
+    }
+
+    pub fn threads(&self) -> bool {
+        self.cfg.borrow().threads
+    }
+
+    /// Every account's own address, lowercased, to show as "me".
+    fn my_addrs(&self) -> Vec<String> {
+        self.accounts.borrow().iter().map(|a| a.email.to_lowercase()).collect()
+    }
+
+    /// The messages that make up the selected list row.
+    fn selected_keys(&self) -> Vec<Key> {
+        let Some(i) = self.selected_index() else { return Vec::new() };
+        match self.convs.borrow().get(i) {
+            Some(c) => c.members.iter().map(key).collect(),
+            None => self.rows.borrow().get(i).map(key).into_iter().collect(),
+        }
+    }
+
+    /// The list position holding any of these messages.
+    fn find_row(&self, keys: &[Key]) -> Option<usize> {
+        if keys.is_empty() {
+            return None;
+        }
+        let convs = self.convs.borrow();
+        if !convs.is_empty() {
+            return convs.iter().position(|c| keys.iter().any(|k| c.contains(k)));
+        }
+        self.rows.borrow().iter().position(|r| keys.contains(&key(r)))
+    }
+
+    /// Picks up a changed conversation in the reader after the list was rebuilt.
+    fn sync_conv(&self) {
+        if self.conv.borrow().is_empty() {
+            return;
+        }
+        let Some(cur) = self.current.borrow().as_ref().map(|(r, _)| key(r)) else { return };
+        let fresh = self.convs.borrow().iter().find(|c| c.contains(&cur)).map(Conv::messages);
+        if let Some(msgs) = fresh {
+            *self.conv.borrow_mut() = msgs;
+            self.render_conv();
+        }
+    }
+
+    /// Opens a list row: its whole conversation in thread mode, else the message.
+    pub fn open_row(self: &Rc<Self>, i: usize) {
+        let msgs = self.convs.borrow().get(i).map(Conv::messages);
+        match msgs {
+            Some(msgs) if msgs.len() > 1 => self.show_conversation(msgs),
+            _ => {
+                self.conv.borrow_mut().clear();
+                let row = self.rows.borrow().get(i).cloned();
+                match row {
+                    Some(r) => self.show_message(r),
+                    None => self.clear_reader(),
+                }
+            }
+        }
+    }
+
+    /// The palette switch: conversations on or off, saved to the config.
+    pub fn toggle_threads(self: &Rc<Self>) {
+        let on = !self.threads();
+        self.cfg.borrow_mut().threads = on;
+        config::save_value("threads", if on { "true" } else { "false" });
+        self.reload_list();
+        match self.selected_index() {
+            Some(i) => self.open_row(i),
+            None => self.clear_reader(),
+        }
+        self.toast(if on { "conversations on" } else { "conversations off" }, false);
     }
 
     fn update_empty(&self) {
@@ -1167,6 +1292,7 @@ impl App {
         let badge = face.last_child().and_downcast::<gtk::Box>().unwrap();
         let text = children(&kids[2]);
         let top: Vec<gtk::Label> = children(&text[0]).into_iter().map(|w| w.downcast::<gtk::Label>().unwrap()).collect();
+        let (from, count, flags_l, date) = (&top[0], &top[1], &top[3], &top[4]);
         let outgoing = r.folder_is_outgoing();
         let (name, addr) = if outgoing {
             let to = r.to.split(',').next().unwrap_or("").trim().to_owned();
@@ -1178,7 +1304,13 @@ impl App {
         };
         av.set(&self.icons, &name, &addr);
         let shown = if name.is_empty() { addr.clone() } else { name.clone() };
-        top[0].set_text(&if outgoing { format!("To {shown}") } else { shown });
+        if !r.people.is_empty() {
+            from.set_text(&r.people);
+        } else {
+            from.set_text(&if outgoing { format!("To {shown}") } else { shown });
+        }
+        count.set_text(&r.count.to_string());
+        count.set_visible(r.count > 1);
         let mut flags = String::new();
         if r.answered {
             flags += "↩ ";
@@ -1189,9 +1321,9 @@ impl App {
         if r.flagged {
             flags += "⭐ ";
         }
-        top[1].set_text(flags.trim_end());
-        top[1].set_visible(!flags.is_empty());
-        top[2].set_text(&short_date(r.date));
+        flags_l.set_text(flags.trim_end());
+        flags_l.set_visible(!flags.is_empty());
+        date.set_text(&short_date(r.date));
         text[1].downcast_ref::<gtk::Label>().unwrap().set_text(if r.subject.is_empty() { "(no subject)" } else { &r.subject });
         let prev = text[2].downcast_ref::<gtk::Label>().unwrap();
         prev.set_text(&r.preview);
@@ -1217,11 +1349,21 @@ impl App {
     /// Re-binds rows after a local change (flags, marks). ListView only rebinds a new object, so
     /// each row gets one and the selection is put back quietly.
     pub fn refresh_rows(&self, keys: &[Key]) {
+        let pos: Vec<usize> = {
+            let rows = self.rows.borrow();
+            keys.iter().filter_map(|k| rows.iter().position(|r| key(r) == *k)).collect()
+        };
+        self.refresh_at(&pos);
+    }
+
+    fn refresh_at(&self, positions: &[usize]) {
+        if positions.is_empty() {
+            return;
+        }
         let sel = self.list_sel.selected();
         self.quiet.set(true);
         let rows = self.rows.borrow();
-        for k in keys {
-            let Some(pos) = rows.iter().position(|r| key(r) == *k) else { continue };
+        for &pos in positions {
             self.list_model.splice(pos as u32, 1, &[glib::BoxedAnyObject::new(rows[pos].clone())]);
         }
         if sel != gtk::INVALID_LIST_POSITION && self.list_sel.selected() != sel {
@@ -1256,9 +1398,20 @@ impl App {
         self.select_index(next as usize);
     }
 
-    /// Messages an action applies to: the marked ones, else the selected one.
+    /// Messages an action applies to: the marked ones, else the selected one. A conversation row
+    /// stands for all of its messages in the view.
     pub fn targets(&self) -> Vec<Row> {
         let marked = self.marked.borrow();
+        let convs = self.convs.borrow();
+        if !convs.is_empty() {
+            let rows = self.rows.borrow();
+            let picked: Vec<usize> = if marked.is_empty() {
+                self.selected_index().into_iter().collect()
+            } else {
+                (0..rows.len()).filter(|&i| marked.contains(&key(&rows[i]))).collect()
+            };
+            return picked.into_iter().filter_map(|i| convs.get(i)).flat_map(|c| c.members.iter().cloned()).collect();
+        }
         if !marked.is_empty() {
             return self.rows.borrow().iter().filter(|r| marked.contains(&key(r))).cloned().collect();
         }
@@ -1302,6 +1455,9 @@ impl App {
 
     /// Mirrors a local flag change into the list and the reader.
     fn apply_local(&self, rows: &[Row], f: impl Fn(&mut Row)) {
+        if !self.convs.borrow().is_empty() {
+            return self.apply_local_convs(rows, f);
+        }
         let keys: Vec<Key> = rows.iter().map(key).collect();
         for r in self.rows.borrow_mut().iter_mut().filter(|r| keys.contains(&key(r))) {
             f(r);
@@ -1313,10 +1469,43 @@ impl App {
         self.refresh_rows(&keys);
     }
 
+    /// `apply_local` in thread mode: the change lands in the conversations, their list rows are
+    /// summed up again.
+    fn apply_local_convs(&self, rows: &[Row], f: impl Fn(&mut Row)) {
+        let keys: HashSet<Key> = rows.iter().map(key).collect();
+        let me = self.my_addrs();
+        let mut touched = Vec::new();
+        {
+            let mut convs = self.convs.borrow_mut();
+            let mut list = self.rows.borrow_mut();
+            for (i, c) in convs.iter_mut().enumerate() {
+                let mut hit = false;
+                for r in c.members.iter_mut().chain(c.mates.iter_mut()).filter(|r| keys.contains(&key(r))) {
+                    f(r);
+                    hit = true;
+                }
+                if hit {
+                    list[i] = c.row(&me);
+                    touched.push(i);
+                }
+            }
+        }
+        for r in self.conv.borrow_mut().iter_mut().chain(self.mates.borrow_mut().rows.iter_mut()).filter(|r| keys.contains(&key(r))) {
+            f(r);
+        }
+        if let Some((cur, _)) = self.current.borrow_mut().as_mut()
+            && keys.contains(&key(cur)) {
+                f(cur);
+            }
+        self.refresh_at(&touched);
+        self.render_conv();
+    }
+
     pub fn toggle_read(self: &Rc<Self>) {
         let t = self.targets();
         if let Some(first) = t.first() {
-            let on = !first.seen;
+            // a conversation goes read if anything in it is unread
+            let on = if self.convs.borrow().is_empty() { !first.seen } else { t.iter().any(|r| !r.seen) };
             self.set_seen(&t, on);
             self.clear_marks();
         }
@@ -1325,7 +1514,7 @@ impl App {
     pub fn toggle_star(self: &Rc<Self>) {
         let t = self.targets();
         let Some(first) = t.first() else { return };
-        let on = !first.flagged;
+        let on = if self.convs.borrow().is_empty() { !first.flagged } else { !t.iter().any(|r| r.flagged) };
         for (acct, folder, uids) in Self::groups(&t) {
             {
                 let store = self.store.borrow();
@@ -1352,6 +1541,9 @@ impl App {
             store.add_unseen(&acct, &folder, -unseen);
         }
         self.marked.borrow_mut().clear();
+        if !self.convs.borrow().is_empty() {
+            return self.remove_from_convs(&keys, sel);
+        }
         let mut i = 0;
         let mut removed_before = 0;
         while i < self.rows.borrow().len() {
@@ -1366,6 +1558,45 @@ impl App {
             }
         }
         *self.current.borrow_mut() = None;
+        self.select_index(sel.saturating_sub(removed_before));
+        self.update_empty();
+        self.rebuild_side();
+        self.update_title();
+    }
+
+    /// `remove_rows` in thread mode: conversations without messages left in the view go.
+    fn remove_from_convs(self: &Rc<Self>, keys: &[Key], sel: usize) {
+        let keys: HashSet<&Key> = keys.iter().collect();
+        let me = self.my_addrs();
+        let mut i = 0;
+        let mut removed_before = 0;
+        let mut touched = Vec::new();
+        while i < self.convs.borrow().len() {
+            let empty = {
+                let mut convs = self.convs.borrow_mut();
+                let c = &mut convs[i];
+                let before = c.members.len();
+                c.members.retain(|r| !keys.contains(&key(r)));
+                if !c.members.is_empty() && c.members.len() != before {
+                    self.rows.borrow_mut()[i] = c.row(&me);
+                    touched.push(i);
+                }
+                c.members.is_empty()
+            };
+            if empty {
+                self.convs.borrow_mut().remove(i);
+                self.rows.borrow_mut().remove(i);
+                self.list_model.remove(i as u32);
+                if i < sel {
+                    removed_before += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        self.refresh_at(&touched);
+        *self.current.borrow_mut() = None;
+        self.conv.borrow_mut().clear();
         self.select_index(sel.saturating_sub(removed_before));
         self.update_empty();
         self.rebuild_side();
@@ -1424,6 +1655,12 @@ impl App {
         self.toast(&format!("deleted {n}"), false);
     }
 
+    /// Every message the list shows, conversations unfolded.
+    fn listed(&self) -> Vec<Row> {
+        let convs = self.convs.borrow();
+        if convs.is_empty() { self.rows.borrow().clone() } else { convs.iter().flat_map(|c| c.members.iter().cloned()).collect() }
+    }
+
     pub fn toggle_mark(&self) {
         let Some(i) = self.selected_index() else { return };
         let Some(r) = self.rows.borrow().get(i).cloned() else { return };
@@ -1455,7 +1692,7 @@ impl App {
     /// search is typed only the matching messages are marked.
     pub fn mark_all_read(self: &Rc<Self>) {
         if !self.search.text().is_empty() {
-            let rows: Vec<Row> = self.rows.borrow().iter().filter(|r| !r.seen).cloned().collect();
+            let rows: Vec<Row> = self.listed().into_iter().filter(|r| !r.seen).collect();
             let n = rows.len();
             self.set_seen(&rows, true);
             return self.toast(&format!("marked {n} read"), false);
@@ -1474,7 +1711,7 @@ impl App {
             }
             self.send(i, Cmd::SeenAll(folder));
         }
-        let rows: Vec<Row> = self.rows.borrow().iter().filter(|r| !r.seen).cloned().collect();
+        let rows: Vec<Row> = self.listed().into_iter().filter(|r| !r.seen).collect();
         self.apply_local(&rows, |r| r.seen = true);
         self.rebuild_side();
         self.update_title();
