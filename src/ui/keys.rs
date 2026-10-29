@@ -64,12 +64,18 @@ pub fn install(app: &Rc<App>) {
         // Ctrl+Shift+7/8/9 by position, whatever symbol Shift puts on the digit in this layout
         let ctrl_shift = gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK;
         if mods & (ctrl_shift | gdk::ModifierType::ALT_MASK) == ctrl_shift
-            && let Some(d) = digit(code)
+            && let Some(d) = digit(code).or(match k.as_str() {
+                // no keymap (Broadway): the US symbols
+                "C-S-&" => Some('7'),
+                "C-S-*" => Some('8'),
+                "C-S-(" => Some('9'),
+                _ => None,
+            })
         {
             k = format!("C-S-{d}");
         }
         if std::env::var_os("BRIEF_DEBUG_KEYS").is_some() {
-            eprintln!("key {k} mode {:?} pane {:?}", app.mode.get(), app.focus.get());
+            eprintln!("key {k} code {code} mode {:?} pane {:?}", app.mode.get(), app.focus.get());
         }
         if handle(&app, &k) { glib::Propagation::Stop } else { glib::Propagation::Proceed }
     });
