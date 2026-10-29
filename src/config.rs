@@ -134,7 +134,7 @@ impl Account {
         if !self.password.is_empty() {
             return Ok(self.password.clone());
         }
-        if let Some(pass) = crate::platform::keyring_get(&self.email).or_else(|| secrets_file_get(&self.email)) {
+        if let Some(pass) = crate::platform::keyring_get("brief", &self.email).or_else(|| secrets_file_get(&self.email)) {
             return Ok(pass);
         }
         Err(format!("no password for {} (set password_cmd)", self.email))
@@ -239,7 +239,7 @@ pub fn append_account(acc: &Account) -> std::io::Result<()> {
 
 /// Stores a password in the keyring. Returns false when there is none.
 pub fn keyring_store(email: &str, pass: &str) -> bool {
-    crate::platform::keyring_store(email, pass)
+    crate::platform::keyring_store("brief", email, pass)
 }
 
 fn secrets_path() -> PathBuf {

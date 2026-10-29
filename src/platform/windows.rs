@@ -85,12 +85,13 @@ pub fn open(target: &str) {
     }
 }
 
-fn target(email: &str) -> Vec<u16> {
-    wide(&format!("brief:{email}"))
+fn target(service: &str, email: &str) -> Vec<u16> {
+    wide(&format!("{service}:{email}"))
 }
 
-pub fn keyring_get(email: &str) -> Option<String> {
-    let target = target(email);
+/// `service` is "brief" for passwords, "brief-oauth" for sign-in tokens.
+pub fn keyring_get(service: &str, email: &str) -> Option<String> {
+    let target = target(service, email);
     let mut cred: *mut CREDENTIALW = std::ptr::null_mut();
     unsafe {
         if CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut cred) == 0 {
@@ -104,9 +105,9 @@ pub fn keyring_get(email: &str) -> Option<String> {
     }
 }
 
-/// Stores a password in the Credential Manager as `brief:<email>`.
-pub fn keyring_store(email: &str, pass: &str) -> bool {
-    let mut target = target(email);
+/// Stores a secret in the Credential Manager as `<service>:<email>`.
+pub fn keyring_store(service: &str, email: &str, pass: &str) -> bool {
+    let mut target = target(service, email);
     let mut user = wide(email);
     let mut blob = pass.as_bytes().to_vec();
     let cred = CREDENTIALW {

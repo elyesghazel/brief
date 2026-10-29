@@ -55,15 +55,17 @@ pub fn open(target: &str) {
     let _ = Command::new("xdg-open").arg(target).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
 
-pub fn keyring_get(email: &str) -> Option<String> {
-    let out = Command::new("secret-tool").args(["lookup", "service", "brief", "account", email]).output().ok()?;
+/// `service` is "brief" for passwords, "brief-oauth" for sign-in tokens.
+pub fn keyring_get(service: &str, email: &str) -> Option<String> {
+    let out = Command::new("secret-tool").args(["lookup", "service", service, "account", email]).output().ok()?;
     (out.status.success() && !out.stdout.is_empty()).then(|| String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_owned())
 }
 
-/// Stores a password in the keyring via secret-tool. Returns false when there is none.
-pub fn keyring_store(email: &str, pass: &str) -> bool {
+/// Stores a secret in the keyring via secret-tool. Returns false when there is none.
+pub fn keyring_store(service: &str, email: &str, pass: &str) -> bool {
+    let label = if service == "brief" { format!("brief: {email}") } else { format!("{service}: {email}") };
     let child = Command::new("secret-tool")
-        .args(["store", "--label", &format!("brief: {email}"), "service", "brief", "account", email])
+        .args(["store", "--label", &label, "service", service, "account", email])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
