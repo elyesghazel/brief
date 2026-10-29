@@ -13,6 +13,7 @@ use std::collections::{HashSet, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -35,6 +36,8 @@ pub enum Cmd {
     Append { role: &'static str, raw: Vec<u8> },
     /// Server-side search over the whole folder.
     Search { folder: String, query: String },
+    /// The account was removed: log out, drop its cache, end the worker and the IDLE watcher.
+    Stop,
 }
 
 #[derive(Debug, Clone)]
@@ -312,6 +315,8 @@ pub struct Worker {
     /// The folder the user looks at, kept fresh along with the special folders.
     active: Option<String>,
     failures: u32,
+    /// Shared with the IDLE watcher.
+    stop: Arc<AtomicBool>,
 }
 
 /// Starts the worker and the IDLE watcher for one account.
@@ -319,6 +324,8 @@ pub fn spawn(idx: usize, acc: Account, events: EventTx, cache_limit: u32, sync_m
     let (tx, rx) = mpsc::channel();
     let idle_tx = tx.clone();
     let idle_acc = acc.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let idle_stop = stop.clone();
     std::thread::Builder::new()
         .name(format!("imap-{}", acc.name))
         .spawn(move || {
@@ -335,11 +342,12 @@ pub fn spawn(idx: usize, acc: Account, events: EventTx, cache_limit: u32, sync_m
                 seen_once: HashSet::new(),
                 active: None,
                 failures: 0,
+                stop,
             };
             w.run(Duration::from_secs(sync_minutes.max(1) * 60));
         })
         .unwrap();
-    std::thread::Builder::new().name("idle".into()).spawn(move || idle_loop(idle_acc, idle_tx)).unwrap();
+    std::thread::Builder::new().name("idle".into()).spawn(move || idle_loop(idle_acc, idle_tx, idle_stop)).unwrap();
     tx.send(Cmd::SyncAll { manual: false }).ok();
     tx
 }
@@ -364,6 +372,9 @@ impl Worker {
                     Err(RecvTimeoutError::Disconnected) => return,
                 },
             };
+            if matches!(cmd, Cmd::Stop) {
+                return self.shutdown();
+            }
             if matches!(cmd, Cmd::SyncAll { .. }) {
                 next_sync = Instant::now() + interval;
                 // collapse queued duplicate syncs
@@ -372,6 +383,9 @@ impl Worker {
             let manual = matches!(cmd, Cmd::SyncAll { manual: true } | Cmd::Sync(_));
             let label = format!("{cmd:?}").split([' ', '(', '{']).next().unwrap_or_default().to_owned();
             let result = self.handle(cmd);
+            if self.stop.load(Ordering::Relaxed) {
+                return self.shutdown();
+            }
             if let Err(e) = result {
                 self.session = None;
                 self.failures += 1;
@@ -386,6 +400,15 @@ impl Worker {
                 self.failures = 0;
             }
         }
+    }
+
+    fn shutdown(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(mut s) = self.session.take() {
+            let _ = s.logout();
+        }
+        // a sync that was running may have written after the UI cleared the cache
+        self.store.delete_account(&self.acc.name);
     }
 
     fn session(&mut self) -> Result<&mut Session, String> {
@@ -494,6 +517,7 @@ impl Worker {
                     self.sync_folder(&folder)?;
                 }
             }
+            Cmd::Stop => {}
             Cmd::Search { folder, query } => {
                 self.status(true, format!("searching {}", decode_utf7(&folder)));
                 let s = self.session()?;
@@ -525,6 +549,11 @@ impl Worker {
     /// right away, so opening a message never waits for a long sync.
     fn pump(&mut self) -> Result<(), String> {
         while let Ok(c) = self.rx.try_recv() {
+            if matches!(c, Cmd::Stop) {
+                // cuts a long sync short; run() sees the flag
+                self.stop.store(true, Ordering::Relaxed);
+                return Err("stopped".into());
+            }
             self.queue.push_back(c);
         }
         let urgent: Vec<Cmd> = {
@@ -675,10 +704,11 @@ impl Worker {
     }
 }
 
-/// Watches the inbox over its own connection and asks the worker to sync on any change.
-fn idle_loop(acc: Account, tx: Sender<Cmd>) {
+/// Watches the inbox over its own connection and asks the worker to sync on any change. Ends
+/// with the worker, at the latest one IDLE round after `stop`.
+fn idle_loop(acc: Account, tx: Sender<Cmd>, stop: Arc<AtomicBool>) {
     std::thread::sleep(Duration::from_secs(5));
-    loop {
+    while !stop.load(Ordering::Relaxed) {
         let result = (|| -> Result<(), String> {
             let mut s = login(&acc)?;
             let caps = s.capabilities().map_err(|e| e.to_string())?;
@@ -693,6 +723,10 @@ fn idle_loop(acc: Account, tx: Sender<Cmd>) {
                     .keepalive(false)
                     .wait_while(imap::extensions::idle::stop_on_any)
                     .map_err(|e| e.to_string())?;
+                if stop.load(Ordering::Relaxed) {
+                    let _ = s.logout();
+                    return Ok(());
+                }
                 if let WaitOutcome::MailboxChanged = outcome
                     && tx.send(Cmd::Sync("INBOX".into())).is_err() {
                         return Ok(());
