@@ -21,6 +21,16 @@ icons="$HOME/.local/share/icons/hicolor"
 done
 [ -f "$icons/index.theme" ] || cp /usr/share/icons/hicolor/index.theme "$icons/" 2>/dev/null || true
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -qtf "$icons" || true
+command -v update-desktop-database >/dev/null && update-desktop-database -q "$HOME/.local/share/applications" || true
+# mailto: links go to brief, unless another mail app already has them
+if command -v xdg-mime >/dev/null; then
+    current=$(xdg-mime query default x-scheme-handler/mailto 2>/dev/null)
+    if [ -z "$current" ] || [ "$current" = brief.desktop ]; then
+        xdg-mime default brief.desktop x-scheme-handler/mailto
+    else
+        echo "note: mailto: links open $current; for brief: xdg-mime default brief.desktop x-scheme-handler/mailto"
+    fi
+fi
 command -v secret-tool >/dev/null || echo "note: no secret-tool (libsecret); passwords go to ~/.config/brief/secrets.toml (0600)"
 fc-list | grep -q "Apple Color Emoji" || echo "tip: for Apple emojis install ttf-apple-emoji (AUR); brief then uses them on its own"
 echo "installed ~/.local/bin/brief - run it, press A to add an account"
