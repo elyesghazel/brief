@@ -868,6 +868,9 @@ impl App {
             (Mode::Search, _) => &[("Enter", "search server"), ("Esc", "back")],
             (Mode::Palette, _) => &[("↑↓", "move"), ("Enter", "run"), ("Esc", "close")],
             (Mode::Help, _) => &[("Esc", "close")],
+            (Mode::Form, _) if self.form.offers_browser() => {
+                &[("Tab", "next"), ("Ctrl+O", "browser sign-in"), ("Ctrl+T", "test"), ("Ctrl+Enter", "test & add"), ("Esc", "cancel")]
+            }
             (Mode::Form, _) => &[("Tab", "next"), ("Ctrl+T", "test"), ("Ctrl+Enter", "test & add"), ("Esc", "cancel")],
             (Mode::Compose, _) => &[("Ctrl+Enter", "send"), ("Ctrl+E", "editor"), ("Ctrl+O", "attach"), ("Esc", "close")],
             (Mode::Normal, Pane::Side) => &[("j k", "folders"), ("l", "messages"), ("?", "keys")],
