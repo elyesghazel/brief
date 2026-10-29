@@ -368,7 +368,8 @@ pub fn help_dialog() -> gtk::Box {
         &[
             ("#Move", ""),
             ("j / k", "next / previous"),
-            ("J / K", "next / previous message, any pane"),
+            ("J / K", "next / previous row, any pane"),
+            ("n / p", "next / previous in a conversation"),
             ("h / l, Tab", "switch pane"),
             ("Enter", "read message"),
             ("gg / G", "top / bottom"),

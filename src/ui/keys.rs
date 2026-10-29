@@ -152,6 +152,8 @@ fn normal(app: &Rc<App>, k: &str) -> bool {
         ("k" | "Up", Pane::Reader) => app.reader_scroll(-0.1),
         ("J", _) => app.list_step(1),
         ("K", _) => app.list_step(-1),
+        ("n", _) if app.threads() => app.conv_step(1),
+        ("p", _) if app.threads() => app.conv_step(-1),
         ("C-d" | "Page_Down", Pane::List) => app.list_step(10),
         ("C-u" | "Page_Up", Pane::List) => app.list_step(-10),
         ("C-d" | "Page_Down" | "space", _) => app.reader_scroll(1.0),
