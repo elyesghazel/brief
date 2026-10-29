@@ -296,3 +296,16 @@ popover listview > row:selected, popover listview > row:hover { background: alph
 .compose-head entry.field { padding: 5px 0; border-bottom: 1px solid alpha(@ghost, 0.6); border-radius: 0; }
 .compose-head entry.field:focus-within { border-bottom-color: @accent; }
 flowbox, flowboxchild { background: none; padding: 0; outline: none; }
+
+/* GTK's emoji chooser (Ctrl+. in the composer) */
+popover.emoji-picker > contents { padding: 0; }
+popover.emoji-picker scrolledwindow, popover.emoji-picker .view, popover.emoji-picker .emoji-toolbar { background: @bg; color: @fg; }
+popover.emoji-picker .emoji-toolbar { border-top: 1px solid alpha(@ghost, 0.7); padding: 2px; }
+popover.emoji-picker label { color: @faint; }
+popover.emoji-picker entry.emoji-searchbar { background: alpha(@ghost, 0.45); color: @fg; border: 1px solid transparent; border-radius: 3px; box-shadow: none; outline: none; margin: 8px; }
+popover.emoji-picker entry.emoji-searchbar:focus-within { border-color: alpha(@accent, 0.8); }
+popover.emoji-picker button.emoji-section { background: none; color: @faint; border: none; border-radius: 3px; box-shadow: none; }
+popover.emoji-picker button.emoji-section:hover { background: alpha(@ghost, 0.55); color: @fg; }
+popover.emoji-picker button.emoji-section:checked { color: @accent; background: alpha(@accent, 0.16); }
+popover.emoji-picker emoji { border-radius: 3px; }
+popover.emoji-picker emoji:hover, popover.emoji-picker emoji:focus { background: alpha(@accent, 0.2); outline: none; }
