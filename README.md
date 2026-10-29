@@ -39,13 +39,25 @@ portable build for Windows.
   that blocks every remote image, font and stylesheet. A banner says how many were blocked; `I`
   loads them for one mail, **Always for sender** remembers the domain. Links open in your
   browser, never in the view.
+- **Rich text.** Bold, italic, links, lists, quotes, headings, inline images and emoji, all
+  with keys, sent as HTML with a plain text alternative. Mails without formatting stay plain
+  text.
+- **Easy setup.** Type your address: brief recognises the provider, signs Gmail in through the
+  browser, finds the servers for everything else and checks them before saving.
 - **Conversations.** Replies group into one row, your own answers from Sent included; the
   reader folds the older messages to one line each. `threads = false` turns it off.
 - **Works offline.** The newest bodies are prefetched, reading needs no connection.
 - **Fits a tiling desktop.** No client-side decorations by default, one window, a second
   `brief` call focuses the running one.
 
-## Install (Arch)
+## Install (Linux)
+
+**Prebuilt.** Download `brief-<version>-linux-x86_64.tar.gz` from the
+[latest release](https://github.com/elyesghazel/brief/releases/latest) and follow its
+`INSTALL.txt`. It needs glibc 2.39+, GTK 4.14+ and WebKitGTK 6.0: Arch, Ubuntu 24.04+, Debian
+13+, Fedora 40+. Release builds have Google sign-in built in.
+
+**From source (Arch):**
 
 ```sh
 pacman -S --needed rust gtk4 webkitgtk-6.0
@@ -73,10 +85,20 @@ bind = $mod SHIFT, M, exec, brief
 
 ## Install (Windows)
 
-Download `brief-windows-x86_64` from the latest
-[build](https://github.com/elyesghazel/brief/actions/workflows/build.yml) (Artifacts), unzip it
-anywhere and run `brief.exe`. It is portable: GTK and everything it needs sit in the folder,
-nothing gets installed. Config is in `%APPDATA%\brief\config.toml`, the cache in
+**Installer.** Download `brief-<version>-setup-x86_64.exe` from the
+[latest release](https://github.com/elyesghazel/brief/releases/latest) and run it. It installs
+for your user only, no admin needed, into `%LOCALAPPDATA%\Programs\brief` (choose "all users"
+in the first dialog for Program Files). It adds a Start menu entry, optionally a desktop shortcut,
+and optionally offers brief for `mailto:` links: tick it, then pick brief under Settings > Apps >
+Default apps > brief. To update, run the newer installer over the old one. Uninstall from
+Settings > Apps; it asks whether to delete your settings and mail cache and keeps them unless
+you say yes. The builds are not code-signed, so SmartScreen may warn the first time: **More
+info**, then **Run anyway**. Silent install: `brief-<version>-setup-x86_64.exe /VERYSILENT /CURRENTUSER`.
+
+**Portable.** Or download `brief-<version>-windows-x86_64-portable.zip`, unzip it anywhere and
+run `brief.exe`. GTK and everything it needs sit in the folder, nothing gets installed.
+
+Either way, config is in `%APPDATA%\brief\config.toml`, the cache in
 `%LOCALAPPDATA%\brief\mail.db` (`brief --help` prints both).
 
 What differs from Linux:
@@ -88,22 +110,25 @@ What differs from Linux:
 - The window has the normal title bar; new-mail notifications are Windows toasts.
 - Starting brief again opens a second window instead of focusing the first.
 
-To build it yourself, in an MSYS2 UCRT64 shell:
+**Building it yourself.** In an MSYS2 UCRT64 shell:
 `pacman -S mingw-w64-ucrt-x86_64-{gtk4,librsvg,adwaita-icon-theme,pkgconf,gcc,rust,ntldd} zip`,
-then `cargo build --release && packaging/windows/bundle.sh dist/brief`.
+then `cargo build --release && packaging/windows/bundle.sh dist/brief`. For the installer, with
+[Inno Setup 6.3+](https://jrsoftware.org/isinfo.php):
+`iscc /DBundle=%CD%\dist\brief packaging\windows\brief.iss`.
 On Linux, `cargo build --no-default-features` builds without WebKit the same way.
 
 ## Accounts
 
-Press `A`, type the address and the password. The servers fill in for Gmail, Outlook, iCloud,
-Yahoo, Fastmail, GMX, Bluewin, Proton Bridge and Zoho, and fall back to `mail.<domain>`.
+On first start brief greets you with a theme picker, then walks you through your first account.
+Later, press `A`. Type your address and press `Enter`: brief names the provider, fills in the
+servers (built-in presets, then Thunderbird's autoconfig, then `mail.<domain>`) and asks only for
+what it needs. `Enter` moves on, `Esc` goes back, `Ctrl+Shift+A` shows the server settings.
+brief checks IMAP and SMTP before it saves anything, and says in plain words what to fix if a
+step fails.
 
-- `Ctrl+T` tests the IMAP and SMTP login and lists what happened, without saving anything.
-- `Ctrl+Enter` tests again and adds the account.
-
-The password goes into your keyring via `secret-tool` (libsecret), or into
-`~/.config/brief/secrets.toml` with mode 0600 when there is none. Gmail, iCloud, Outlook and
-Yahoo need an app password.
+Passwords go into your keyring via `secret-tool` (libsecret), or into
+`~/.config/brief/secrets.toml` with mode 0600 when there is none. iCloud, Yahoo and Outlook need
+an app password; the setup links to the page where you make one.
 
 Or by hand in `~/.config/brief/config.toml` (restart afterwards):
 
@@ -126,42 +151,33 @@ To remove an account: `Ctrl+K` -> **Remove account…**, pick it, confirm with `
 brief cuts just that block out of the config, forgets the saved password and drops the cached
 mail. The mail on the server stays.
 
-### Gmail and Outlook without app passwords
+### Sign in with Google
 
-Gmail and Microsoft accounts (outlook.com, hotmail, live, Microsoft 365) can sign in through the
-browser instead (OAuth2, XOAUTH2 for IMAP and SMTP). In the add-account form press `Ctrl+O`
-after typing the address; for accounts written by hand run `brief login <name>`. brief keeps the
-refresh token in the keyring (or `secrets.toml`) and renews access on its own.
+Gmail and Google Workspace addresses sign in through the browser: type the address, press
+`Enter`, approve brief in the tab that opens, done. No app password, and brief never sees your
+Google password; it keeps a refresh token in your keyring (or `secrets.toml`) and renews access
+on its own. If Google signs you out (password change, revoked access), the sidebar says so and
+`Ctrl+K` -> **Sign in again** fixes it. Accounts written by hand use `auth = "oauth2"` and
+`brief login <name>`.
 
-brief has no registered OAuth app yet, so bring your own client id once per provider:
+Outlook, Hotmail, Live and Microsoft 365 use a password: an app password for personal Microsoft
+accounts (the setup links to the page), your normal one for Microsoft 365 if your admin allows
+IMAP and SMTP AUTH.
+
+**Building brief yourself?** Release builds have brief's Google client built in. Your own build
+takes it from `BRIEF_GOOGLE_CLIENT_ID` and `BRIEF_GOOGLE_CLIENT_SECRET` at compile time;
+without them, add your own in `config.toml`. Create a Google Cloud project, enable the Gmail
+API, set up the consent screen with the scopes `https://mail.google.com/`, `openid`, `email`
+and `profile`, create an OAuth client of type *Desktop app*, then:
 
 ```toml
 [oauth.google]
 client_id = "1234-abc.apps.googleusercontent.com"
 client_secret = "GOCSPX-..."
-
-[oauth.microsoft]
-client_id = "00000000-0000-0000-0000-000000000000"
-
-[[account]]
-name = "Gmail"
-email = "me@gmail.com"
-imap = { host = "imap.gmail.com", port = 993, security = "tls" }
-smtp = { host = "smtp.gmail.com", port = 465, security = "tls" }
-auth = "oauth2"
-oauth = { provider = "google" }   # client_id etc. can also go here per account
 ```
 
-**Google:** in the Google Cloud console create a project, enable the Gmail API, set up the OAuth
-consent screen (External, add yourself as a test user, scope `https://mail.google.com/`), then
-Credentials -> Create OAuth client ID -> *Desktop app*. Copy the client ID and secret (Google
-requires the secret for desktop apps; it is not really secret).
-
-**Microsoft:** in the Azure portal (Entra ID) go to App registrations -> New registration, for
-accounts in any organizational directory and personal Microsoft accounts. Under Authentication add
-the platform *Mobile and desktop applications* with redirect URI `http://localhost` and turn on
-"Allow public client flows". Under API permissions add the delegated `IMAP.AccessAsUser.All`,
-`SMTP.Send` and `offline_access`. Copy the Application (client) ID; no secret needed.
+`[oauth.microsoft]` with your own Entra ID app (public client, redirect `http://localhost`,
+`IMAP.AccessAsUser.All`, `SMTP.Send`, `offline_access`) works the same way.
 
 ## Keys
 
@@ -188,8 +204,25 @@ the platform *Mobile and desktop applications* with redirect URI `http://localho
 | `A` | add account |
 | mailto: link in a mail, or `L` -> link | write to it in brief's composer |
 
-Composer: `Ctrl+Enter` send, `Ctrl+E` edit in `$EDITOR`, `Ctrl+O` attach, `Ctrl+S` save draft,
-`Tab` takes the address suggestion, `Esc` twice discards.
+| `E` | edit a draft, or any message as new |
+
+Composer:
+
+| Keys | |
+|---|---|
+| `Ctrl+Enter` / `Ctrl+S` / `Esc` twice | send / save draft / discard |
+| `Ctrl+B` `Ctrl+I` `Ctrl+U` `Ctrl+Shift+X` | bold, italic, underline, strikethrough |
+| `Ctrl+L` | link (`Ctrl+click` opens it) |
+| `Ctrl+Shift+8` / `7` / `9` | bulleted list / numbered list / quote |
+| `Ctrl+Alt+1` / `2` / `0` | heading / subheading / normal text |
+| `Ctrl+\` | clear formatting |
+| `Ctrl+Shift+P` | insert image (or paste / drop one) |
+| `Ctrl+.` | emoji |
+| `Ctrl+Shift+M` / `Ctrl+Shift+F` | rich or plain text / show or hide the formatting bar |
+| `Ctrl+O` / `Ctrl+E` | attach / edit in `$EDITOR` |
+
+Typing `- `, `1. `, `> `, `# ` or `## ` at the start of a line turns it into a list, quote or
+heading. `Tab` takes the address suggestion.
 
 ## Themes
 
@@ -219,6 +252,8 @@ Your own: `~/.config/brief/themes/<name>.css` with `@define-color` lines for
 | `notify` | `true` | desktop notification for new inbox mail |
 | `decorations` | `false` | window title bar |
 | `editor` | `$TERMINAL -e $EDITOR` | for `Ctrl+E`, e.g. `"kitty -e nvim"` |
+| `compose` | `"rich"` | `"plain"` starts the composer without formatting |
+| `toolbar` | `true` | formatting bar in the composer |
 | `threads` | `true` | one row per conversation, your Sent replies included; `Ctrl+K` toggles it |
 
 ## CLI
