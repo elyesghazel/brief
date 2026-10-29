@@ -311,7 +311,12 @@ impl App {
         items
     }
 
+    /// Ctrl+K. From the ☰ button Settings comes first, else signed-out accounts do.
     pub fn open_palette_main(self: &Rc<Self>) {
+        self.open_palette_commands(false);
+    }
+
+    pub fn open_palette_commands(self: &Rc<Self>, menu: bool) {
         let composing = self.stack.visible_child_name().as_deref() == Some("compose");
         let mut items = if composing { self.compose_items() } else { Vec::new() };
         items.extend(vec![
@@ -367,6 +372,9 @@ impl App {
             }
         }
         items.splice(0..0, again);
+        let settings = item("Settings", ",", |a| a.open_settings());
+        let at = if menu && !composing { 0 } else { items.iter().position(|i| i.title == "Compose").unwrap_or(0) };
+        items.insert(at, settings);
         items.extend(self.folder_items(|a, acct, folder| a.open_view(View::Folder { acct, folder }), "Go to "));
         self.open_palette("commands", items, "", None);
     }
@@ -503,6 +511,75 @@ impl App {
     }
 }
 
+/// Every key by group, for `?` and the settings' Keyboard section. `#Name` starts a group.
+pub const HELP: &[&[(&str, &str)]] = &[
+    &[
+        ("#Move", ""),
+        ("j / k", "next / previous"),
+        ("J / K", "next / previous row, any pane"),
+        ("n / p", "next / previous in a conversation"),
+        ("h / l, Tab", "switch pane"),
+        ("Enter", "read message"),
+        ("gg / G", "top / bottom"),
+        ("Ctrl+d / Ctrl+u", "half page"),
+        ("Space", "page down in the message"),
+        ("[ / ]", "previous / next folder"),
+        ("0, 1-9", "all inboxes, account inbox"),
+        ("gi gs gd ga gt gj", "inbox sent drafts archive trash spam"),
+        ("#Find", ""),
+        ("/", "search (from: to: subject: is:unread has:attachment)"),
+        ("Enter in search", "also search the server"),
+    ],
+    &[
+        ("#Messages", ""),
+        ("c", "compose"),
+        ("r / R / f", "reply / reply all / forward"),
+        ("E", "edit draft, or edit as new"),
+        ("e", "archive"),
+        ("d", "delete"),
+        ("!", "spam"),
+        ("s", "star"),
+        ("u", "read / unread"),
+        ("U", "mark all as read"),
+        ("m", "move to folder"),
+        ("x / *", "select / select all"),
+        ("o / O", "open in browser (O loads images)"),
+        ("H", "HTML / plain text"),
+        ("L / a", "links / attachments"),
+    ],
+    &[
+        ("#App", ""),
+        ("Ctrl+R", "refresh every account"),
+        ("Ctrl+K or :", "all commands"),
+        ("t", "theme"),
+        (", / Ctrl+,", "settings"),
+        ("A", "add account"),
+        ("q / Ctrl+Q", "quit"),
+        ("#Compose", ""),
+        ("Ctrl+Enter", "send"),
+        ("Ctrl+E", "edit in $EDITOR"),
+        ("Ctrl+O", "attach file"),
+        ("Ctrl+S", "save draft"),
+        ("Tab", "accept address suggestion"),
+        ("Esc", "close (twice to discard)"),
+    ],
+    &[
+        ("#Formatting", ""),
+        ("Ctrl+B / I / U", "bold / italic / underline"),
+        ("Ctrl+Shift+X", "strikethrough"),
+        ("Ctrl+L", "link (Ctrl+click opens)"),
+        ("Ctrl+Shift+8 / 7", "bulleted / numbered list"),
+        ("Ctrl+Shift+9", "quote"),
+        ("Ctrl+Alt+1 / 2 / 0", "heading / subheading / text"),
+        ("Ctrl+\\", "clear formatting"),
+        ("Ctrl+Shift+P", "image (or paste, drop)"),
+        ("Ctrl+. / Ctrl+;", "emoji"),
+        ("- * 1. > # + Space", "start a list, quote, heading"),
+        ("Ctrl+Shift+M", "rich / plain text"),
+        ("Ctrl+Shift+F", "formatting bar"),
+    ],
+];
+
 pub fn help_dialog() -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("dialog");
@@ -520,72 +597,7 @@ pub fn help_dialog() -> gtk::Box {
     cols.set_margin_start(24);
     cols.set_margin_end(24);
     cols.set_margin_bottom(10);
-    let groups: &[&[(&str, &str)]] = &[
-        &[
-            ("#Move", ""),
-            ("j / k", "next / previous"),
-            ("J / K", "next / previous row, any pane"),
-            ("n / p", "next / previous in a conversation"),
-            ("h / l, Tab", "switch pane"),
-            ("Enter", "read message"),
-            ("gg / G", "top / bottom"),
-            ("Ctrl+d / Ctrl+u", "half page"),
-            ("Space", "page down in the message"),
-            ("[ / ]", "previous / next folder"),
-            ("0, 1-9", "all inboxes, account inbox"),
-            ("gi gs gd ga gt gj", "inbox sent drafts archive trash spam"),
-            ("#Find", ""),
-            ("/", "search (from: to: subject: is:unread has:attachment)"),
-            ("Enter in search", "also search the server"),
-        ],
-        &[
-            ("#Messages", ""),
-            ("c", "compose"),
-            ("r / R / f", "reply / reply all / forward"),
-            ("E", "edit draft, or edit as new"),
-            ("e", "archive"),
-            ("d", "delete"),
-            ("!", "spam"),
-            ("s", "star"),
-            ("u", "read / unread"),
-            ("U", "mark all as read"),
-            ("m", "move to folder"),
-            ("x / *", "select / select all"),
-            ("o / O", "open in browser (O loads images)"),
-            ("H", "HTML / plain text"),
-            ("L / a", "links / attachments"),
-        ],
-        &[
-            ("#App", ""),
-            ("Ctrl+R", "refresh every account"),
-            ("Ctrl+K or :", "all commands"),
-            ("t", "theme"),
-            ("A", "add account"),
-            ("q / Ctrl+Q", "quit"),
-            ("#Compose", ""),
-            ("Ctrl+Enter", "send"),
-            ("Ctrl+E", "edit in $EDITOR"),
-            ("Ctrl+O", "attach file"),
-            ("Ctrl+S", "save draft"),
-            ("Tab", "accept address suggestion"),
-            ("Esc", "close (twice to discard)"),
-        ],
-        &[
-            ("#Formatting", ""),
-            ("Ctrl+B / I / U", "bold / italic / underline"),
-            ("Ctrl+Shift+X", "strikethrough"),
-            ("Ctrl+L", "link (Ctrl+click opens)"),
-            ("Ctrl+Shift+8 / 7", "bulleted / numbered list"),
-            ("Ctrl+Shift+9", "quote"),
-            ("Ctrl+Alt+1 / 2 / 0", "heading / subheading / text"),
-            ("Ctrl+\\", "clear formatting"),
-            ("Ctrl+Shift+P", "image (or paste, drop)"),
-            ("Ctrl+. / Ctrl+;", "emoji"),
-            ("- * 1. > # + Space", "start a list, quote, heading"),
-            ("Ctrl+Shift+M", "rich / plain text"),
-            ("Ctrl+Shift+F", "formatting bar"),
-        ],
-    ];
+    let groups = HELP;
     for g in groups {
         let grid = gtk::Grid::new();
         grid.set_row_spacing(3);

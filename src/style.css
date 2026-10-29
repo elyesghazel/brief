@@ -391,3 +391,109 @@ popover.emoji-picker button.emoji-section:hover { background: alpha(@ghost, 0.55
 popover.emoji-picker button.emoji-section:checked { color: @accent; background: alpha(@accent, 0.16); }
 popover.emoji-picker emoji { border-radius: 3px; }
 popover.emoji-picker emoji:hover, popover.emoji-picker emoji:focus { background: alpha(@accent, 0.2); outline: none; }
+
+/* ── settings ─────────────────────────── */
+.settings { background: @bg; }
+list.set-nav { background: shade(@bg, 0.94); padding: 16px 8px; }
+list.set-nav > row { padding: 0; margin: 1px 0; background: none; border-radius: 3px; outline: none; box-shadow: none; }
+list.set-nav > row:hover { background: alpha(@ghost, 0.35); }
+list.set-nav > row:selected { background: alpha(@accent, 0.16); }
+.set-nav-item { padding: 8px 12px; }
+.set-nav-name { color: @muted; }
+row:selected .set-nav-name { color: @fg; font-weight: bold; }
+.set-nav-key { color: @faint; font-size: 0.8em; border: 1px solid alpha(@ghost, 0.9); border-radius: 2px; padding: 0 5px; }
+row:selected .set-nav-key { color: @muted; }
+.set-body { padding: 30px 56px 80px 44px; }
+.set-h1 { color: @fg; font-weight: 800; font-size: 1.5em; }
+.set-lead { color: @faint; margin: 3px 0 6px; }
+.set-version { color: @muted; font-size: 0.92em; }
+.set-hero { margin-bottom: 8px; }
+.set-empty { color: @faint; margin-top: 24px; }
+.set-kicker { color: @faint; font-size: 0.78em; letter-spacing: 0.12em; text-transform: uppercase; margin: 22px 0 8px 2px; }
+.set-gap { min-height: 14px; }
+.set-group { border: 1px solid alpha(@ghost, 0.85); border-radius: 3px; }
+.set-row {
+  padding: 11px 16px 11px 14px;
+  border-bottom: 1px solid alpha(@ghost, 0.55);
+  border-left: 2px solid transparent;
+  min-height: 34px;
+}
+.set-group > .set-row:last-child { border-bottom: none; }
+.set-row:hover { background: alpha(@ghost, 0.16); }
+.set-row.cur { background: alpha(@accent, 0.09); border-left-color: @accent; }
+.set-row.compact { padding-top: 6px; padding-bottom: 6px; min-height: 0; }
+.set-title { color: @fg; }
+.set-desc { color: @faint; font-size: 0.9em; margin-top: 2px; }
+.set-desc.ok { color: @green; }
+.set-desc.error { color: @red; }
+.set-path { font-size: 0.86em; }
+.set-value { color: @muted; margin-left: 12px; }
+.set-chev { color: @faint; margin-left: 12px; font-size: 1.15em; }
+.set-row.cur .set-chev { color: @accent; }
+.set-unit { color: @faint; margin-left: 8px; }
+.set-key {
+  color: @fg; font-family: monospace; font-size: 0.9em;
+  background: alpha(@ghost, 0.35); border: 1px solid alpha(@ghost, 0.9); border-radius: 2px; padding: 1px 7px;
+}
+.color-dot.big { min-width: 12px; min-height: 12px; }
+
+entry.set-entry, entry.set-entry:focus-within, passwordentry.set-entry, passwordentry.set-entry:focus-within {
+  background: alpha(@ghost, 0.25);
+  color: @fg;
+  caret-color: @accent;
+  border: 1px solid alpha(@ghost, 0.9);
+  border-radius: 3px;
+  box-shadow: none;
+  outline: none;
+  min-height: 28px;
+  padding: 0 9px;
+}
+entry.set-entry:focus-within, passwordentry.set-entry:focus-within { border-color: @accent; background: @hover; }
+passwordentry.set-entry image { color: @faint; }
+entry.set-entry.num { padding: 0 4px; border-radius: 0; border-left: none; border-right: none; }
+
+.set-textbox { border: 1px solid alpha(@ghost, 0.9); border-radius: 3px; background: alpha(@ghost, 0.25); }
+.set-textbox:focus-within { border-color: @accent; background: @hover; }
+textview.set-textarea, textview.set-textarea > text { background: none; color: @fg; caret-color: @accent; }
+textview.set-textarea { padding: 8px 10px; }
+scrolledwindow.set-textbox > undershoot, scrolledwindow.set-textbox > overshoot { background: none; }
+
+.seg { border: 1px solid alpha(@ghost, 0.9); border-radius: 3px; }
+.seg > button {
+  background: none; color: @muted; border: none; border-radius: 0; box-shadow: none; outline: none;
+  padding: 3px 12px; min-height: 24px; border-right: 1px solid alpha(@ghost, 0.9);
+}
+.seg > button:last-child { border-right: none; }
+.seg > button:hover { background: alpha(@ghost, 0.45); color: @fg; }
+.seg > button.on { background: alpha(@accent, 0.2); color: @accent; font-weight: bold; }
+
+.stepper > button.step-btn {
+  background: alpha(@ghost, 0.35); color: @fg; border: 1px solid alpha(@ghost, 0.9); box-shadow: none; outline: none;
+  min-width: 26px; min-height: 28px; padding: 0;
+}
+.stepper > button.step-btn:first-child { border-radius: 3px 0 0 3px; }
+.stepper > button.step-btn:nth-child(3) { border-radius: 0 3px 3px 0; }
+.stepper > button.step-btn:hover { background: alpha(@ghost, 0.7); }
+
+button.set-btn {
+  background: alpha(@ghost, 0.35); color: @fg; border: 1px solid alpha(@ghost, 0.9); border-radius: 3px;
+  box-shadow: none; outline: none; padding: 3px 14px; min-height: 26px;
+}
+button.set-btn:hover { background: alpha(@ghost, 0.7); }
+button.set-btn.primary { background: @accent; color: @bg; border-color: @accent; font-weight: bold; }
+button.set-btn.primary:hover { background: shade(@accent, 1.08); }
+button.set-btn.danger { color: @red; border-color: alpha(@red, 0.55); background: alpha(@red, 0.06); }
+button.set-btn.danger:hover { background: alpha(@red, 0.16); }
+
+switch {
+  background: alpha(@ghost, 0.7); border: 1px solid alpha(@ghost, 0.9); border-radius: 3px;
+  box-shadow: none; outline: none; min-width: 40px; min-height: 20px; padding: 0;
+}
+switch:checked { background: @accent; border-color: @accent; }
+switch > slider { background: @fg; border: none; border-radius: 2px; box-shadow: none; min-width: 18px; min-height: 18px; margin: 1px; }
+switch:checked > slider { background: @bg; }
+switch > image { color: transparent; }
+
+.set-themes { margin: 2px 0 2px -3px; }
+.set-themes flowboxchild { padding: 0; }
+.set-themes .swatch { min-width: 74px; }

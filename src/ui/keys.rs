@@ -100,6 +100,7 @@ fn handle(app: &Rc<App>, k: &str) -> bool {
         Mode::Confirm => app.confirm_key(k),
         Mode::Form => app.form_key(k),
         Mode::Compose => app.compose_key(k),
+        Mode::Settings => app.settings_key(k),
         Mode::Search => match k {
             "Escape" => {
                 if app.search.text().is_empty() {
@@ -247,6 +248,7 @@ fn normal(app: &Rc<App>, k: &str) -> bool {
         }
         ("C-k" | ":" | "C-p", _) => app.open_palette_main(),
         ("t" | "C-t", _) => app.open_palette_themes(),
+        ("," | "C-,", _) => app.open_settings(),
         ("?" | "F1", _) => app.show_help(),
         ("A", _) => app.open_form(),
         ("q", Pane::Reader) => app.set_focus(Pane::List),

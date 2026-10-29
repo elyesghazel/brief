@@ -7,6 +7,7 @@ mod keys;
 mod palette;
 mod reader;
 mod rich;
+mod settings;
 mod web;
 mod widgets;
 
@@ -40,6 +41,7 @@ pub enum Mode {
     Compose,
     /// A destructive command waits for y / Esc.
     Confirm,
+    Settings,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -48,6 +50,9 @@ enum SideItem {
     Header(usize),
     Folder(usize, String),
 }
+
+/// Work on the cache while an account's worker is stopped.
+pub type CacheJob = Box<dyn FnOnce(&mut Store) -> Result<(), String> + Send>;
 
 /// Key of a message across accounts.
 pub type Key = (String, String, u32);
@@ -121,6 +126,9 @@ pub struct App {
     help: gtk::Box,
     form: form::Form,
     pub compose: compose::Compose,
+    settings: settings::Settings,
+    /// Accounts (by address) whose worker is being restarted.
+    restarting: RefCell<HashSet<String>>,
 }
 
 fn label(text: &str, class: &str) -> gtk::Label {
@@ -230,6 +238,16 @@ pub fn activate(gapp: &gtk::Application, mailto: Option<&str>) {
     if let Some(url) = mailto {
         app.compose_mailto(url);
     }
+}
+
+/// The sender icon downloader for a `favicons` mode; none for "off".
+fn icon_fetcher(mode: &str, tx: &imap::EventTx) -> Option<std::sync::mpsc::Sender<String>> {
+    let tx = tx.clone();
+    (mode != "off").then(|| {
+        crate::avatar::spawn(mode.to_owned(), move |d| {
+            let _ = tx.send_blocking(Event::Icon(d));
+        })
+    })
 }
 
 fn build(app: &gtk::Application) -> Rc<App> {
@@ -437,6 +455,8 @@ fn build(app: &gtk::Application) -> Rc<App> {
     stack.set_transition_duration(90);
     stack.add_named(&main, Some("main"));
     stack.add_named(&compose.root, Some("compose"));
+    let settings = settings::Settings::new();
+    stack.add_named(&settings.root, Some("settings"));
 
     stack.set_vexpand(true);
     let shell = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -458,13 +478,7 @@ fn build(app: &gtk::Application) -> Rc<App> {
     }
     win.set_child(Some(&overlay));
 
-    let fetch = (cfg.favicons != "off").then(|| {
-        let tx = tx.clone();
-        crate::avatar::spawn(cfg.favicons.clone(), move |d| {
-            let _ = tx.send_blocking(Event::Icon(d));
-        })
-    });
-    let icons = widgets::Icons::new(fetch);
+    let icons = widgets::Icons::new(icon_fetcher(&cfg.favicons, &tx));
     let acct_css = gtk::CssProvider::new();
     gtk::style_context_add_provider_for_display(&display, &acct_css, gtk::STYLE_PROVIDER_PRIORITY_USER + 2);
 
@@ -526,6 +540,8 @@ fn build(app: &gtk::Application) -> Rc<App> {
         help,
         form,
         compose,
+        settings,
+        restarting: RefCell::new(HashSet::new()),
     });
 
     let start_theme = app.theme_name.borrow().clone();
@@ -537,6 +553,7 @@ fn build(app: &gtk::Application) -> Rc<App> {
     app.compose.wire(&app);
     app.form.wire(&app);
     app.pal.wire(&app);
+    app.settings.wire(&app);
     keys::install(&app);
 
     {
@@ -613,7 +630,7 @@ impl App {
         let me = Rc::downgrade(self);
         menu_btn.connect_clicked(move |_| {
             if let Some(app) = me.upgrade() {
-                app.open_palette_main();
+                app.open_palette_commands(true);
             }
         });
 
@@ -705,6 +722,7 @@ impl App {
         self.rebuild_side();
         let idx = self.accounts.borrow().len() - 1;
         self.toast(&format!("added {}, syncing…", self.accounts.borrow()[idx].name), false);
+        self.settings_refresh();
     }
 
     /// Takes an account out of brief: its config block, saved password, cache and worker. The
@@ -755,7 +773,62 @@ impl App {
         }
         self.update_sync();
         self.update_title();
+        self.settings_account_gone(&acc.name);
         self.toast(&format!("removed {}, its mail on the server is untouched", acc.name), false);
+    }
+
+    /// Stops the workers of accounts `idxs`, runs `between` on the cache once they are gone (off
+    /// the UI thread), calls `done` with its result and starts fresh workers with the settings
+    /// of that moment. Accounts already restarting are left out; with `between` that refuses.
+    pub fn restart_workers(
+        self: &Rc<Self>,
+        idxs: Vec<usize>,
+        between: Option<CacheJob>,
+        done: impl FnOnce(&Rc<App>, Result<(), String>) + 'static,
+    ) -> bool {
+        let emails: Vec<String> = idxs.iter().filter_map(|&i| self.accounts.borrow().get(i).map(|a| a.email.clone())).collect();
+        let busy: Vec<String> = emails.iter().filter(|e| self.restarting.borrow().contains(*e)).cloned().collect();
+        if between.is_some() && !busy.is_empty() {
+            return false;
+        }
+        let emails: Vec<String> = emails.into_iter().filter(|e| !busy.contains(e)).collect();
+        let joins: Vec<_> = {
+            let workers = self.workers.borrow();
+            let accounts = self.accounts.borrow();
+            idxs.iter()
+                .filter(|&&i| accounts.get(i).is_some_and(|a| emails.contains(&a.email)))
+                .filter_map(|&i| workers.get(i).and_then(|w| w.quit()))
+                .collect()
+        };
+        self.restarting.borrow_mut().extend(emails.iter().cloned());
+        let (tx, rx) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            for j in joins {
+                let _ = j.join();
+            }
+            let result = match between {
+                Some(f) => Store::open().map_err(|e| e.to_string()).and_then(|mut s| f(&mut s)),
+                None => Ok(()),
+            };
+            let _ = tx.send_blocking(result);
+        });
+        let app = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(result) = rx.recv().await else { return };
+            done(&app, result);
+            for email in &emails {
+                app.restarting.borrow_mut().remove(email);
+                let Some(i) = app.accounts.borrow().iter().position(|a| a.email == *email) else { continue };
+                let acc = app.accounts.borrow()[i].clone();
+                let (limit, minutes) = (app.cfg.borrow().cache_limit, app.cfg.borrow().sync_minutes);
+                let w = imap::spawn(i, acc, app.events.clone(), limit, minutes);
+                if let Some(slot) = app.workers.borrow_mut().get_mut(i) {
+                    *slot = w;
+                }
+            }
+            app.update_sync();
+        });
+        true
     }
 
     pub fn send(&self, acct: usize, cmd: Cmd) {
@@ -968,6 +1041,8 @@ impl App {
             Mode::Form => ("ACCOUNT", true),
             Mode::Compose => ("COMPOSE", true),
             Mode::Confirm => ("CONFIRM", false),
+            Mode::Settings if self.settings.is_editing() => ("EDIT", true),
+            Mode::Settings => ("SETTINGS", false),
         };
         self.mode_label.set_text(text);
         if insert {
@@ -987,7 +1062,12 @@ impl App {
         while let Some(c) = self.hints.first_child() {
             self.hints.remove(&c);
         }
+        let settings;
         let list: &[(&str, &str)] = match (self.mode.get(), self.focus.get()) {
+            (Mode::Settings, _) => {
+                settings = self.settings_hints();
+                &settings
+            }
             (Mode::Search, _) => &[("Enter", "search server"), ("Esc", "back")],
             (Mode::Palette, _) => &[("↑↓", "move"), ("Enter", "run"), ("Esc", "close")],
             (Mode::Help, _) => &[("Esc", "close")],
@@ -1897,9 +1977,16 @@ impl App {
 
     pub fn hide_overlay(&self) {
         self.overlay_scrim.set_visible(false);
-        self.set_mode(if self.stack.visible_child_name().as_deref() == Some("compose") { Mode::Compose } else { Mode::Normal });
-        if self.mode.get() == Mode::Normal {
-            self.set_focus(self.focus.get());
+        let mode = match self.stack.visible_child_name().as_deref() {
+            Some("compose") => Mode::Compose,
+            Some("settings") => Mode::Settings,
+            _ => Mode::Normal,
+        };
+        self.set_mode(mode);
+        match mode {
+            Mode::Normal => self.set_focus(self.focus.get()),
+            Mode::Settings => self.settings.park_focus(),
+            _ => {}
         }
     }
 

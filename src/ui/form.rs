@@ -30,7 +30,7 @@ use std::time::Duration;
 /// Themes offered on the welcome page.
 const THEMES: [&str; 6] = ["graphite", "eg", "eg-light", "catppuccin-mocha", "rose-pine-dawn", "tokyo-night"];
 /// Account colors on the done page; "" follows the theme.
-const COLORS: [&str; 7] = ["", "#7aa2f7", "#6cc28a", "#d9ad5b", "#ff5f56", "#c4a7e7", "#89dceb"];
+pub(super) const COLORS: [&str; 7] = ["", "#7aa2f7", "#6cc28a", "#d9ad5b", "#ff5f56", "#c4a7e7", "#89dceb"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Page {
@@ -55,7 +55,7 @@ impl Page {
 
 /// A finished browser sign-in.
 #[derive(Clone)]
-struct SignedIn {
+pub(super) struct SignedIn {
     email: String,
     provider: String,
     refresh: String,
@@ -80,7 +80,7 @@ struct CheckRow {
 
 /// What the check page runs.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Item {
+pub(super) enum Item {
     SignIn,
     Imap,
     Smtp,
@@ -834,14 +834,14 @@ impl Form {
 }
 
 /// Who runs an address's mail, as the sign-in page names it.
-struct Service {
+pub(super) struct Service {
     name: String,
     hint: &'static str,
     /// Where to create an app password, when the service wants one.
     app_password: &'static str,
 }
 
-fn service(email: &str, method: Option<Provider>, mx: Option<Provider>) -> Service {
+pub(super) fn service(email: &str, method: Option<Provider>, mx: Option<Provider>) -> Service {
     let domain = email.trim().rsplit_once('@').map(|(_, d)| d.to_lowercase()).unwrap_or_default();
     let s = |name: &str, hint, app_password| Service { name: name.into(), hint, app_password };
     match (oauth::provider_for_address(email), domain.as_str()) {
@@ -889,7 +889,7 @@ fn service(email: &str, method: Option<Provider>, mx: Option<Provider>) -> Servi
 
 /// A failed check in plain words and what to try next; the flag says the servers are the likely
 /// cause.
-fn explain(item: Item, err: &str, server: &Server, oauth: Option<Provider>, svc: &Service) -> (String, String, bool) {
+pub(super) fn explain(item: Item, err: &str, server: &Server, oauth: Option<Provider>, svc: &Service) -> (String, String, bool) {
     let e = err.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| e.contains(w));
     let at = format!("{}:{}", server.host, server.port);
@@ -1512,7 +1512,7 @@ fn resolved(acc: Account) -> Account {
     config::load().unwrap_or_default().resolve_oauth(acc)
 }
 
-enum Progress {
+pub(super) enum Progress {
     Start(Item),
     Ok(Item, String),
     Fail(Item, String),
@@ -1521,7 +1521,7 @@ enum Progress {
     Signed(SignedIn),
 }
 
-fn run_checks(acc: &Account, secret: &str, tx: &async_channel::Sender<Progress>) {
+pub(super) fn run_checks(acc: &Account, secret: &str, tx: &async_channel::Sender<Progress>) {
     let send = |s: Progress| {
         let _ = tx.send_blocking(s);
     };
