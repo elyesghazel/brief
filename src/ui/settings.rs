@@ -995,7 +995,7 @@ impl App {
         );
         p.group("Window");
         p.toggle("Title bar", "The window's own title bar. Tiling desktops do without it.", cfg.decorations, |a, on| {
-            a.win.set_decorated(on);
+            super::set_window_bar(&a.win, on);
             a.cfg.borrow_mut().decorations = on;
             a.settings_save("decorations", on);
         });
