@@ -56,9 +56,23 @@ pub fn mailboxes(list: &str) -> Result<Vec<Mailbox>, String> {
         .collect()
 }
 
+/// `<random@sender-domain>`, so replies to this mail can find it.
+fn message_id(email: &str) -> String {
+    use ring::rand::SecureRandom as _;
+    let mut bytes = [0u8; 12];
+    let _ = ring::rand::SystemRandom::new().fill(&mut bytes);
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let domain = email.rsplit_once('@').map(|(_, d)| d).filter(|d| !d.is_empty()).unwrap_or("brief.invalid");
+    format!("<{hex}@{domain}>")
+}
+
 pub fn build(acc: &Account, d: &Draft) -> Result<Message, String> {
     let from = Mailbox::new(Some(acc.from_name().to_owned()), acc.email.parse().map_err(|e| format!("from: {e}"))?);
-    let mut b = Message::builder().from(from).subject(d.subject.clone()).user_agent("brief".into());
+    let mut b = Message::builder()
+        .from(from)
+        .subject(d.subject.clone())
+        .user_agent("brief".into())
+        .message_id(Some(message_id(&acc.email)));
     let to = mailboxes(&d.to)?;
     if to.is_empty() {
         return Err("no recipient".into());
@@ -190,6 +204,13 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert_eq!(m[1].email.to_string(), "lea@y.ch");
         assert!(mailboxes("not an address").is_err());
+    }
+
+    #[test]
+    fn message_id_uses_the_sender_domain() {
+        let id = message_id("me@x.ch");
+        assert!(id.starts_with('<') && id.ends_with("@x.ch>") && id.len() == 31, "{id}");
+        assert_ne!(id, message_id("me@x.ch"));
     }
 
     fn acc() -> Account {
