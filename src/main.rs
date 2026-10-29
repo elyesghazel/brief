@@ -22,6 +22,7 @@ const HELP: &str = "brief - keyboard-first mail
 
 usage:
   brief            open the window (a second call focuses the running one)
+  brief mailto:…   write to a mailto: link, in the running window if there is one
   brief sync       sync every account once without a window and print what changed
   brief login ACC  browser sign-in for an account with auth = \"oauth2\"
   brief themes     list themes
@@ -66,6 +67,7 @@ fn main() -> glib::ExitCode {
             }
             return glib::ExitCode::SUCCESS;
         }
+        Some(url) if mailto::is_mailto(url) => {}
         Some(other) if !other.starts_with("--gapplication") => {
             eprintln!("brief: unknown command {other}\n\n{}", help());
             return glib::ExitCode::FAILURE;
@@ -73,17 +75,21 @@ fn main() -> glib::ExitCode {
         _ => {}
     }
     platform::prepare_gui();
-    let app = gtk::Application::builder().application_id("ch.elyesghazel.brief").flags(platform::app_flags()).build();
-    app.connect_activate(|app| {
-        // single instance: launching again just brings the window back
-        if let Some(w) = app.active_window() {
-            w.present();
-            return;
-        }
-        gtk::Window::set_default_icon_name("ch.elyesghazel.brief");
-        ui::build(app);
+    // single instance: launching again brings the window back, and a mailto: link given to the
+    // second call travels to the first one
+    let app = gtk::Application::builder()
+        .application_id("ch.elyesghazel.brief")
+        .flags(platform::app_flags() | gtk::gio::ApplicationFlags::HANDLES_COMMAND_LINE)
+        .build();
+    app.connect_startup(|_| gtk::Window::set_default_icon_name("ch.elyesghazel.brief"));
+    app.connect_activate(|app| ui::activate(app, None));
+    app.connect_command_line(|app, cmd| {
+        let url = cmd.arguments().iter().skip(1).map(|a| a.to_string_lossy().into_owned()).find(|a| mailto::is_mailto(a));
+        ui::activate(app, url.as_deref());
+        glib::ExitCode::SUCCESS
     });
-    app.run_with_args::<&str>(&[])
+    let argv: Vec<String> = std::iter::once("brief".to_owned()).chain(args.into_iter().filter(|a| mailto::is_mailto(a))).collect();
+    app.run_with_args(&argv)
 }
 
 use gtk::glib;

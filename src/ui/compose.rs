@@ -2,7 +2,7 @@
 
 use super::{App, Mode, label};
 use crate::imap::Cmd;
-use crate::message;
+use crate::{mailto, message};
 use crate::smtp::{self, Draft};
 use gtk::prelude::*;
 use gtk::{gio, glib};
@@ -228,6 +228,32 @@ impl App {
         let acct = self.current_acct();
         *self.compose.reply_of.borrow_mut() = None;
         self.open_compose(acct, Draft { body: self.signature(acct), ..Default::default() }, "new message");
+    }
+
+    /// A `mailto:` link from a mail or the command line, sent from the account on screen. An
+    /// open message with changes is never replaced.
+    pub fn compose_mailto(self: &Rc<Self>, url: &str) {
+        let Some(mut d) = mailto::parse(url) else { return };
+        match self.mode.get() {
+            Mode::Form => {
+                self.toast("finish or cancel the account form first", true);
+                return;
+            }
+            Mode::Palette => {
+                self.palette_key("Escape");
+            }
+            Mode::Help => self.hide_overlay(),
+            _ => {}
+        }
+        let c = &self.compose;
+        if self.stack.visible_child_name().as_deref() == Some("compose") && c.state() != *c.pristine.borrow() {
+            self.toast("send or discard the open message first, then open the link again", true);
+            return;
+        }
+        let acct = self.current_acct();
+        d.body += &self.signature(acct);
+        *c.reply_of.borrow_mut() = None;
+        self.open_compose(acct, d, "new message");
     }
 
     pub fn compose_reply(self: &Rc<Self>, all: bool) {

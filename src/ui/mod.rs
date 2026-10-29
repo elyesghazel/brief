@@ -211,7 +211,25 @@ pub fn find_links(text: &str) -> Vec<(usize, usize)> {
     out
 }
 
-pub fn build(app: &gtk::Application) {
+thread_local! {
+    static APP: RefCell<std::rc::Weak<App>> = const { RefCell::new(std::rc::Weak::new()) };
+}
+
+/// Brings the window up, building it on first use, and opens the composer for a `mailto:` URL.
+pub fn activate(gapp: &gtk::Application, mailto: Option<&str>) {
+    let app = match APP.with_borrow(std::rc::Weak::upgrade) {
+        Some(app) => {
+            app.win.present();
+            app
+        }
+        None => build(gapp),
+    };
+    if let Some(url) = mailto {
+        app.compose_mailto(url);
+    }
+}
+
+fn build(app: &gtk::Application) -> Rc<App> {
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -532,6 +550,8 @@ pub fn build(app: &gtk::Application) {
     if app.accounts.borrow().is_empty() {
         app.open_form();
     }
+    APP.set(Rc::downgrade(&app));
+    app
 }
 
 impl App {
@@ -1716,6 +1736,15 @@ impl App {
         self.rebuild_side();
         self.update_title();
         self.toast(&if n == 0 { "nothing unread".to_owned() } else { format!("marked {n} read") }, false);
+    }
+
+    /// A link from a mail: `mailto:` opens the composer, everything else the browser.
+    pub fn open_link(self: &Rc<Self>, uri: &str) {
+        if crate::mailto::is_mailto(uri) {
+            self.compose_mailto(uri);
+        } else {
+            open_uri(uri);
+        }
     }
 
     /// Writes the HTML part to a file with remote content blocked and opens it in the browser.
