@@ -37,6 +37,10 @@ pub struct Config {
     /// Command for Ctrl+E in the composer, the file path is appended. Empty = $TERMINAL -e $EDITOR
     /// (Windows: %EDITOR%, else Notepad).
     pub editor: String,
+    /// How the composer starts: "rich" (formatting, sent as HTML when used) or "plain".
+    pub compose: String,
+    /// The formatting toolbar above the message; Ctrl+Shift+F toggles it.
+    pub toolbar: bool,
     #[serde(rename = "account")]
     pub accounts: Vec<Account>,
     /// OAuth app per provider (`[oauth.google]`, `[oauth.microsoft]`), shared by its accounts.
@@ -57,6 +61,8 @@ impl Default for Config {
             notify: true,
             decorations: crate::platform::DECORATIONS,
             editor: String::new(),
+            compose: "rich".into(),
+            toolbar: true,
             accounts: Vec::new(),
             oauth: HashMap::new(),
         }
@@ -263,6 +269,8 @@ theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # notify = true
 # decorations = false    # title bar, on by default on Windows
 # editor = "kitty -e nvim" # Ctrl+E in the composer
+# compose = "rich"        # "plain" starts the composer without formatting; Ctrl+Shift+M switches
+# toolbar = true           # formatting bar in the composer; Ctrl+Shift+F hides it
 
 # Add accounts with `A` in the app, or by hand:
 #
