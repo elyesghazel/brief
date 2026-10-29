@@ -269,7 +269,7 @@ fn build(app: &gtk::Application) -> Rc<App> {
     topbar.add_css_class("topbar");
     let brand = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     brand.add_css_class("brand-box");
-    brand.append(&widgets::emoji("unified", 20));
+    brand.append(&widgets::logo(20));
     brand.append(&label("brief", "brand"));
     topbar.append(&brand);
     let path = label("", "path");

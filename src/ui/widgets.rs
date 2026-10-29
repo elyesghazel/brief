@@ -2,7 +2,7 @@
 
 use crate::avatar;
 use gtk::prelude::*;
-use gtk::{gdk, gdk_pixbuf, pango};
+use gtk::{gdk, gdk_pixbuf, glib, pango};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Sender;
@@ -24,6 +24,15 @@ fn emoji_char(name: &str) -> &'static str {
         "clip" => "📎",
         _ => "📁",
     }
+}
+
+/// The app icon, drawn from the bundled 64px PNG so it is sharp on HiDPI too.
+pub fn logo(px: i32) -> gtk::Image {
+    let bytes = glib::Bytes::from_static(include_bytes!("../../assets/icons/hicolor/64x64/apps/ch.elyesghazel.brief.png"));
+    let img = gtk::Image::from_paintable(gdk::Texture::from_bytes(&bytes).ok().as_ref());
+    img.set_pixel_size(px);
+    img.add_css_class("logo");
+    img
 }
 
 /// An emoji icon about `px` pixels tall.
