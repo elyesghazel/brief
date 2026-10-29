@@ -75,6 +75,7 @@ fn main() -> glib::ExitCode {
             w.present();
             return;
         }
+        gtk::Window::set_default_icon_name("ch.elyesghazel.brief");
         ui::build(app);
     });
     app.run_with_args::<&str>(&[])
