@@ -102,8 +102,11 @@ Either way, config is in `%APPDATA%\brief\config.toml`, the cache in
 `%LOCALAPPDATA%\brief\mail.db` (`brief --help` prints both).
 
 What differs from Linux:
-- HTML mail shows as text, because WebKitGTK does not exist for Windows. `o` opens the HTML in
-  your browser (`O` with remote images).
+- HTML mail renders in Microsoft Edge WebView2, which comes with Windows 10 and 11, with the same
+  rules as on Linux: scripts off, remote images blocked until `I`, links open in your browser.
+  WebView2 only starts with the first HTML mail. Without the WebView2 Runtime
+  (https://developer.microsoft.com/microsoft-edge/webview2/) HTML mail shows as text and `o`
+  opens it in your browser. Its data lives in `%LOCALAPPDATA%\brief\webview2`.
 - Passwords go to the Windows Credential Manager (`brief:<email>`); `password_cmd` runs through
   `cmd`.
 - `Ctrl+E` opens `editor` from the config, else `%EDITOR%` in a console window, else Notepad.
@@ -112,7 +115,8 @@ What differs from Linux:
 
 **Building it yourself.** In an MSYS2 UCRT64 shell:
 `pacman -S mingw-w64-ucrt-x86_64-{gtk4,librsvg,adwaita-icon-theme,pkgconf,gcc,rust,ntldd} zip`,
-then `cargo build --release && packaging/windows/bundle.sh dist/brief`. For the installer, with
+then `cargo build --release && packaging/windows/bundle.sh dist/brief` (it also copies
+`WebView2Loader.dll`, which brief loads at run time). For the installer, with
 [Inno Setup 6.3+](https://jrsoftware.org/isinfo.php):
 `iscc /DBundle=%CD%\dist\brief packaging\windows\brief.iss`.
 On Linux, `cargo build --no-default-features` builds without WebKit the same way.
