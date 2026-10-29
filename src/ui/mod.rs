@@ -249,6 +249,17 @@ fn build(app: &gtk::Application) -> Rc<App> {
     let win = gtk::ApplicationWindow::builder().application(app).title("brief").default_width(1360).default_height(860).build();
     win.add_css_class("brief");
     win.set_decorated(cfg.decorations);
+    if cfg.decorations {
+        // a slim bar in the theme's colors instead of GTK's default title bar; double-click maximizes
+        let controls = gtk::WindowControls::new(gtk::PackType::End);
+        controls.set_decoration_layout(Some(":minimize,close"));
+        controls.set_hexpand(true);
+        controls.set_halign(gtk::Align::End);
+        let bar = gtk::WindowHandle::new();
+        bar.add_css_class("winbar");
+        bar.set_child(Some(&controls));
+        win.set_titlebar(Some(&bar));
+    }
 
     let display = gtk::prelude::WidgetExt::display(&win);
     let base = gtk::CssProvider::new();

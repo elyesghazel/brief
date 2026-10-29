@@ -11,6 +11,18 @@ window.brief {
   border-bottom: 1px solid alpha(@ghost, 0.7);
   background: shade(@bg, 0.94);
 }
+
+/* window bar when brief draws its own (decorations = true, the Windows default) */
+window.brief.csd, window.brief.csd decoration { border-radius: 0; }
+window.brief.csd decoration { box-shadow: 0 0 0 1px alpha(@ghost, 0.9), 0 4px 18px alpha(black, 0.45); }
+.winbar { background: shade(@bg, 0.94); min-height: 24px; }
+.winbar windowcontrols button {
+  min-width: 40px; min-height: 24px; padding: 0; margin: 0;
+  border: none; border-radius: 0; background: none; box-shadow: none; color: @faint;
+}
+.winbar windowcontrols button image { -gtk-icon-size: 12px; background: none; box-shadow: none; padding: 0; }
+.winbar windowcontrols button:hover { background: alpha(@ghost, 0.7); color: @fg; }
+.winbar windowcontrols button.close:hover { background: @red; color: white; }
 .brand-box  { margin-right: 18px; }
 .brand      { color: @fg; font-weight: 800; font-size: 1.15em; letter-spacing: 0.02em; }
 .path       { color: @faint; margin-right: 14px; }
