@@ -38,6 +38,8 @@ pub enum Cmd {
     Search { folder: String, query: String },
     /// The account was removed: log out, drop its cache, end the worker and the IDLE watcher.
     Stop,
+    /// Like `Stop`, the cache stays: the worker is restarted with new settings.
+    Quit,
 }
 
 #[derive(Debug, Clone)]
@@ -305,6 +307,7 @@ const HEADER_QUERY: &str = "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER
 pub struct Handle {
     tx: Sender<Cmd>,
     idx: Arc<AtomicUsize>,
+    thread: std::cell::Cell<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl Handle {
@@ -315,6 +318,13 @@ impl Handle {
     /// The account moved up in the list (one before it was removed).
     pub fn set_idx(&self, idx: usize) {
         self.idx.store(idx, Ordering::Relaxed);
+    }
+
+    /// Ends the worker and keeps its cache; join the thread to know it wrote its last row. A
+    /// running sync stops at its next step.
+    pub fn quit(&self) -> Option<std::thread::JoinHandle<()>> {
+        self.send(Cmd::Quit);
+        self.thread.take()
     }
 }
 
@@ -335,6 +345,8 @@ pub struct Worker {
     failures: u32,
     /// Shared with the IDLE watcher.
     stop: Arc<AtomicBool>,
+    /// Stopping drops the cache (the account was removed).
+    forget: bool,
 }
 
 /// Starts the worker and the IDLE watcher for one account.
@@ -346,7 +358,7 @@ pub fn spawn(idx: usize, acc: Account, events: EventTx, cache_limit: u32, sync_m
     let idle_acc = acc.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let idle_stop = stop.clone();
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name(format!("imap-{}", acc.name))
         .spawn(move || {
             let store = Store::open().expect("cache");
@@ -363,13 +375,14 @@ pub fn spawn(idx: usize, acc: Account, events: EventTx, cache_limit: u32, sync_m
                 active: None,
                 failures: 0,
                 stop,
+                forget: false,
             };
             w.run(Duration::from_secs(sync_minutes.max(1) * 60));
         })
         .unwrap();
     std::thread::Builder::new().name("idle".into()).spawn(move || idle_loop(idle_acc, idle_tx, idle_stop)).unwrap();
     tx.send(Cmd::SyncAll { manual: false }).ok();
-    Handle { tx, idx }
+    Handle { tx, idx, thread: std::cell::Cell::new(Some(thread)) }
 }
 
 impl Worker {
@@ -396,7 +409,8 @@ impl Worker {
                     Err(RecvTimeoutError::Disconnected) => return,
                 },
             };
-            if matches!(cmd, Cmd::Stop) {
+            if matches!(cmd, Cmd::Stop | Cmd::Quit) {
+                self.forget = matches!(cmd, Cmd::Stop);
                 return self.shutdown();
             }
             if matches!(cmd, Cmd::SyncAll { .. }) {
@@ -432,7 +446,9 @@ impl Worker {
             let _ = s.logout();
         }
         // a sync that was running may have written after the UI cleared the cache
-        self.store.delete_account(&self.acc.name);
+        if self.forget {
+            self.store.delete_account(&self.acc.name);
+        }
     }
 
     fn session(&mut self) -> Result<&mut Session, String> {
@@ -541,7 +557,7 @@ impl Worker {
                     self.sync_folder(&folder)?;
                 }
             }
-            Cmd::Stop => {}
+            Cmd::Stop | Cmd::Quit => {}
             Cmd::Search { folder, query } => {
                 self.status(true, format!("searching {}", decode_utf7(&folder)));
                 let s = self.session()?;
@@ -573,8 +589,9 @@ impl Worker {
     /// right away, so opening a message never waits for a long sync.
     fn pump(&mut self) -> Result<(), String> {
         while let Ok(c) = self.rx.try_recv() {
-            if matches!(c, Cmd::Stop) {
+            if matches!(c, Cmd::Stop | Cmd::Quit) {
                 // cuts a long sync short; run() sees the flag
+                self.forget = matches!(c, Cmd::Stop);
                 self.stop.store(true, Ordering::Relaxed);
                 return Err("stopped".into());
             }
