@@ -6,7 +6,8 @@ The mark is a geometric lowercase b whose bowl is a letter (Brief = letter): a s
 bowl, and the envelope flap cut into it. It is drawn on a 16 unit grid so 16 and 32 px land on
 whole pixels. Small sizes (up to 32 px) fill the flap solid, a thin chevron would turn to grey there.
 The wordmark text is JetBrains Mono, converted to outlines (see glyphs.py).
-Every file under assets/logo and assets/icons is generated: change the numbers here and rebuild.
+Every file under assets/logo and assets/icons is generated, and the installer's wizard images in
+packaging/windows/wizard: change the numbers here and rebuild.
 """
 import io
 import shutil
@@ -20,6 +21,7 @@ from glyphs import bounds, font, text_path
 ROOT = Path(__file__).resolve().parents[2]
 LOGO = ROOT / "assets/logo"
 ICONS = ROOT / "assets/icons/hicolor"
+WIZARD = ROOT / "packaging/windows/wizard"
 APP_ID = "ch.elyesghazel.brief"
 
 BG, INK = "#000000", "#ffffff"
@@ -31,6 +33,9 @@ L, R, TOP, BOT, BOWL, T = 3, 13, 2, 14, 5, 2
 RADIUS = 0.03        # tile corner, share of the side: nearly square
 SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 SMALL = 32           # up to here: solid flap
+# Inno Setup wizard images at 100, 150 and 200 % scaling: the side panel and the header icon
+WIZARD_LARGE = ((164, 314), (246, 459), (328, 628))
+WIZARD_SMALL = ((55, 55), (83, 80), (110, 106))
 
 
 def mark_d(x0: float, top: float, x1: float, bot: float, bowl: float, t: float,
@@ -95,6 +100,27 @@ def wordmark(ink: str, size: float = 96, weight: int = 700) -> str:
             f'<path fill="{ink}" fill-rule="evenodd" d="{mark}"/><path fill="{ink}" d="{d}"/></svg>')
 
 
+def wizard_panel(w: int, h: int) -> str:
+    """The welcome page's side panel: the white wordmark on black, a little above the middle."""
+    mark = wordmark(INK)
+    vw, vh = (float(v) for v in mark.split('viewBox="0 0 ')[1].split('"')[0].split())
+    mw = w * 0.62
+    mh = mw * vh / vw
+    inner = mark.replace('<svg ', f'<svg x="{(w - mw) / 2:.1f}" y="{h * 0.42 - mh / 2:.1f}" '
+                         f'width="{mw:.1f}" height="{mh:.1f}" ', 1)
+    inner = inner.replace(f'width="{vw:.0f}" height="{vh:.0f}"', "", 1)
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">'
+            f'<rect width="{w}" height="{h}" fill="{BG}"/>{inner}</svg>')
+
+
+def bmp(img: Image.Image, path: Path):
+    """Inno Setup wants BMPs: flatten onto white, the wizard header's colour."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flat = Image.new("RGB", img.size, "#ffffff")
+    flat.paste(img, mask=img.getchannel("A"))
+    flat.convert("L").save(path)  # black and white only: 8 bit grey keeps them small
+
+
 def png(svg: str, w: int, h: int | None = None) -> Image.Image:
     data = bytes(resvg_py.svg_to_bytes(svg_string=svg, width=w, height=h or w))
     return Image.open(io.BytesIO(data)).convert("RGBA")
@@ -123,6 +149,14 @@ def main():
 
     ico = [png(icon(px), px) for px in (16, 24, 32, 48, 64, 128, 256)]
     ico[-1].save(LOGO / "brief.ico", sizes=[i.size for i in ico], append_images=ico[:-1])
+    for w, h in WIZARD_LARGE:
+        bmp(png(wizard_panel(w, h), w, h), WIZARD / f"large-{w}x{h}.bmp")
+    for w, h in WIZARD_SMALL:
+        # the icon tile, square, centred in the header slot
+        s = min(w, h)
+        img = Image.new("RGBA", (w, h))
+        img.paste(png(icon(s), s), ((w - s) // 2, (h - s) // 2))
+        bmp(img, WIZARD / f"small-{w}x{h}.bmp")
     print("built", len(list(ICONS.rglob("*.*"))), "icons")
 
 
