@@ -1,5 +1,8 @@
 //! brief - a keyboard-first mail client for Hyprland.
 
+// no console window behind the app on Windows; the CLI attaches to the parent's instead
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod avatar;
 mod config;
 mod imap;
