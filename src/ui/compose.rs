@@ -136,6 +136,7 @@ impl Compose {
             in_reply_to: self.in_reply_to.borrow().clone(),
             references: self.references.borrow().clone(),
             attachments: self.files.borrow().clone(),
+            ..Default::default()
         }
     }
 

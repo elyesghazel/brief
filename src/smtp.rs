@@ -18,6 +18,17 @@ pub struct Draft {
     pub in_reply_to: String,
     pub references: String,
     pub attachments: Vec<PathBuf>,
+    /// The rich version; `body` is then its plain text alternative.
+    pub html: Option<String>,
+    /// Images the HTML shows as `cid:`.
+    pub inline: Vec<Inline>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Inline {
+    pub cid: String,
+    pub mime: String,
+    pub data: Vec<u8>,
 }
 
 /// Splits "a@x.ch, Lea <lea@y.ch>; b@z" into mailboxes.
@@ -67,10 +78,30 @@ pub fn build(acc: &Account, d: &Draft) -> Result<Message, String> {
         b = b.references(refs.trim().to_owned());
     }
     let text = SinglePart::builder().header(ContentType::TEXT_PLAIN).body(d.body.clone());
+    // multipart/alternative of the text and the HTML, the HTML in multipart/related with its images
+    let rich = d.html.as_ref().map(|h| {
+        let html = SinglePart::html(h.clone());
+        let alt = MultiPart::alternative().singlepart(text.clone());
+        if d.inline.is_empty() {
+            return alt.singlepart(html);
+        }
+        let related = d.inline.iter().fold(MultiPart::related().singlepart(html), |m, i| {
+            let mime = ContentType::parse(&i.mime).unwrap_or(ContentType::parse("application/octet-stream").unwrap());
+            m.singlepart(Attachment::new_inline(i.cid.clone()).body(i.data.clone(), mime))
+        });
+        alt.multipart(related)
+    });
     if d.attachments.is_empty() {
-        return b.singlepart(text).map_err(|e| e.to_string());
+        return match rich {
+            Some(alt) => b.multipart(alt),
+            None => b.singlepart(text),
+        }
+        .map_err(|e| e.to_string());
     }
-    let mut multi = MultiPart::mixed().singlepart(text);
+    let mut multi = match rich {
+        Some(alt) => MultiPart::mixed().multipart(alt),
+        None => MultiPart::mixed().singlepart(text),
+    };
     for path in &d.attachments {
         let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
@@ -159,5 +190,48 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert_eq!(m[1].email.to_string(), "lea@y.ch");
         assert!(mailboxes("not an address").is_err());
+    }
+
+    fn acc() -> Account {
+        toml::from_str(
+            r#"name = "t"
+email = "me@x.ch"
+imap = { host = "x", port = 1 }
+smtp = { host = "x", port = 1 }"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn plain_stays_single_part() {
+        let d = Draft { to: "a@x.ch".into(), body: "hi".into(), ..Default::default() };
+        let raw = String::from_utf8(build(&acc(), &d).unwrap().formatted()).unwrap();
+        assert!(raw.contains("Content-Type: text/plain"));
+        assert!(!raw.contains("multipart"));
+    }
+
+    #[test]
+    fn rich_is_alternative_with_related_images() {
+        let png = vec![137, 80, 78, 71, 1, 2, 3];
+        let d = Draft {
+            to: "a@x.ch".into(),
+            body: "hi *you*".into(),
+            html: Some("<b>hi</b> <img src=\"cid:img1@brief\">".into()),
+            inline: vec![Inline { cid: "img1@brief".into(), mime: "image/png".into(), data: png }],
+            attachments: vec![std::env::current_exe().unwrap()],
+            ..Default::default()
+        };
+        let raw = build(&acc(), &d).unwrap().formatted();
+        let msg = mail_parser::MessageParser::default().parse(&raw).unwrap();
+        let types: Vec<String> = msg
+            .parts()
+            .map(|p| p.content_type().map(|c| format!("{}/{}", c.ctype(), c.subtype().unwrap_or(""))).unwrap_or_default())
+            .collect();
+        assert_eq!(types, ["multipart/mixed", "multipart/alternative", "text/plain", "multipart/related", "text/html", "image/png", "application/octet-stream"]);
+        assert_eq!(msg.parts().nth(5).unwrap().content_id(), Some("img1@brief"));
+        assert_eq!(msg.body_text(0).unwrap().trim(), "hi *you*");
+        let p = crate::message::parse(&raw).unwrap();
+        assert_eq!(p.attachments.len(), 1);
+        assert_eq!(p.inline.len(), 1);
     }
 }
