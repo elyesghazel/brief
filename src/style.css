@@ -77,6 +77,7 @@ row:selected .side-name { color: @fg; font-weight: bold; }
 .side-acct-name { color: @fg; font-weight: bold; }
 .side-acct-mail { color: @faint; font-size: 0.85em; }
 .side-key   { color: @faint; font-size: 0.8em; border: 1px solid alpha(@ghost, 0.9); border-radius: 2px; padding: 0 5px; }
+.side-signed-out { color: @red; font-size: 0.9em; }
 .acct-dot   { min-width: 10px; min-height: 10px; border-radius: 99px; background: @accent; }
 .pill {
   background: alpha(@accent, 0.18);
@@ -248,6 +249,11 @@ row:selected .title  { font-weight: bold; }
 .form-error { color: @red; padding: 8px 20px 0; }
 .form-ok    { color: @green; padding: 8px 20px 0; }
 .form-hint  { color: @faint; padding: 8px 20px 0; font-size: 0.9em; }
+.form-key   { color: @faint; font-size: 0.8em; border: 1px solid alpha(@ghost, 0.9); border-radius: 2px; padding: 0 5px; margin-left: 10px; }
+.signin-text { color: @fg; font-weight: bold; }
+.signin-text.wait { color: @accent; }
+.signin-text.ok   { color: @green; }
+.servers-text { color: @faint; }
 
 .compose { background: @bg; }
 .compose-head { padding: 18px 28px 8px; border-bottom: 1px solid alpha(@ghost, 0.7); }

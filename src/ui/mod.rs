@@ -974,10 +974,7 @@ impl App {
             (Mode::Palette, _) => &[("↑↓", "move"), ("Enter", "run"), ("Esc", "close")],
             (Mode::Help, _) => &[("Esc", "close")],
             (Mode::Confirm, _) => &[("Enter y", "yes"), ("Esc n", "no")],
-            (Mode::Form, _) if self.form.offers_browser() => {
-                &[("Tab", "next"), ("Ctrl+O", "browser sign-in"), ("Ctrl+T", "test"), ("Ctrl+Enter", "test & add"), ("Esc", "cancel")]
-            }
-            (Mode::Form, _) => &[("Tab", "next"), ("Ctrl+T", "test"), ("Ctrl+Enter", "test & add"), ("Esc", "cancel")],
+            (Mode::Form, _) => self.form.hints(),
             (Mode::Compose, _) if self.compose.rich.on.get() => {
                 &[("Ctrl+Enter", "send"), ("Ctrl+B I U", "format"), ("Ctrl+L", "link"), ("Ctrl+O", "attach"), ("Ctrl+K", "commands"), ("Esc", "close")]
             }
