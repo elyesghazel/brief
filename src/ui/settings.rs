@@ -971,7 +971,7 @@ impl App {
             a.settings_save("font_size", v);
         });
         p.group("Mail");
-        if web::AVAILABLE {
+        if web::BUILT {
             p.toggle("HTML mail", "Render HTML mail in the window, remote images blocked. Off shows the text version. H switches one mail.", cfg.html, |a, on| {
                 a.cfg.borrow_mut().html = on;
                 a.rerender();

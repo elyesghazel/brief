@@ -4,6 +4,9 @@
 
 pub use imp::*;
 
+/// This build has an HTML view; whether it starts is up to `Html::available()`.
+pub const BUILT: bool = cfg!(any(all(feature = "webkit", unix), windows));
+
 #[cfg(all(feature = "webkit", unix))]
 mod imp {
     use super::super::open_uri;
