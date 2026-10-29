@@ -6,6 +6,7 @@ mod form;
 mod keys;
 mod palette;
 mod reader;
+mod rich;
 mod web;
 mod widgets;
 
@@ -977,7 +978,10 @@ impl App {
                 &[("Tab", "next"), ("Ctrl+O", "browser sign-in"), ("Ctrl+T", "test"), ("Ctrl+Enter", "test & add"), ("Esc", "cancel")]
             }
             (Mode::Form, _) => &[("Tab", "next"), ("Ctrl+T", "test"), ("Ctrl+Enter", "test & add"), ("Esc", "cancel")],
-            (Mode::Compose, _) => &[("Ctrl+Enter", "send"), ("Ctrl+E", "editor"), ("Ctrl+O", "attach"), ("Esc", "close")],
+            (Mode::Compose, _) if self.compose.rich.on.get() => {
+                &[("Ctrl+Enter", "send"), ("Ctrl+B I U", "format"), ("Ctrl+L", "link"), ("Ctrl+O", "attach"), ("Ctrl+K", "commands"), ("Esc", "close")]
+            }
+            (Mode::Compose, _) => &[("Ctrl+Enter", "send"), ("Ctrl+E", "editor"), ("Ctrl+O", "attach"), ("Ctrl+Shift+M", "rich text"), ("Esc", "close")],
             (Mode::Normal, Pane::Side) => &[("j k", "folders"), ("l", "messages"), ("?", "keys")],
             (Mode::Normal, Pane::List) => &[("j k", "move"), ("Enter", "read"), ("c", "write"), ("Ctrl+K", "commands"), ("?", "keys")],
             (Mode::Normal, Pane::Reader) if self.conv.borrow().len() > 1 => {

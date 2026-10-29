@@ -111,7 +111,7 @@ pub fn build(acc: &Account, d: &Draft) -> Result<Message, String> {
     b.multipart(multi).map_err(|e| e.to_string())
 }
 
-fn mime_of(name: &str) -> &'static str {
+pub fn mime_of(name: &str) -> &'static str {
     match name.rsplit('.').next().unwrap_or_default().to_lowercase().as_str() {
         "pdf" => "application/pdf",
         "png" => "image/png",

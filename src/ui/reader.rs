@@ -670,6 +670,7 @@ impl App {
                 .next_back()
                 .unwrap_or_else(|| "#888888".into())
         };
+        self.compose.rich.recolor(&color("accent"), &color("muted"), &color("faint"));
         let table = self.rd.body.buffer().tag_table();
         for (name, fg, underline) in [("link", color("accent"), true), ("quote", color("faint"), false), ("quote2", color("ghost"), false)] {
             let tag = table.lookup(name).unwrap_or_else(|| {

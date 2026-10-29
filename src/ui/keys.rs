@@ -43,6 +43,12 @@ pub fn name(key: gdk::Key, mods: gdk::ModifierType) -> String {
     out
 }
 
+/// The digit on a key's unshifted level, if it has one.
+fn digit(code: u32) -> Option<char> {
+    let keys = gdk::Display::default()?.map_keycode(code)?;
+    keys.into_iter().filter(|(k, _)| k.level() == 0).find_map(|(_, v)| v.to_unicode().filter(char::is_ascii_digit))
+}
+
 fn is_text_focus(app: &App) -> bool {
     let Some(f) = gtk::prelude::GtkWindowExt::focus(&app.win) else { return false };
     f.is::<gtk::Text>() || f.downcast_ref::<gtk::TextView>().is_some_and(|t| t.is_editable())
@@ -52,9 +58,16 @@ pub fn install(app: &Rc<App>) {
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     let me = Rc::downgrade(app);
-    keys.connect_key_pressed(move |_, key, _, mods| {
+    keys.connect_key_pressed(move |_, key, code, mods| {
         let Some(app) = me.upgrade() else { return glib::Propagation::Proceed };
-        let k = name(key, mods);
+        let mut k = name(key, mods);
+        // Ctrl+Shift+7/8/9 by position, whatever symbol Shift puts on the digit in this layout
+        let ctrl_shift = gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK;
+        if mods & (ctrl_shift | gdk::ModifierType::ALT_MASK) == ctrl_shift
+            && let Some(d) = digit(code)
+        {
+            k = format!("C-S-{d}");
+        }
         if std::env::var_os("BRIEF_DEBUG_KEYS").is_some() {
             eprintln!("key {k} mode {:?} pane {:?}", app.mode.get(), app.focus.get());
         }
@@ -180,6 +193,7 @@ fn normal(app: &Rc<App>, k: &str) -> bool {
         ("r", _) => app.compose_reply(false),
         ("R", _) => app.compose_reply(true),
         ("f", _) => app.compose_forward(),
+        ("E", _) => app.compose_edit(),
         ("e" | "y", _) => app.move_to_role("archive", "archived"),
         ("d" | "#" | "Delete", _) => app.delete(),
         ("!", _) => app.move_to_role("junk", "marked as spam"),

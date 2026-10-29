@@ -1,9 +1,12 @@
 //! The composer page. Sending runs on a thread; on failure the draft comes back with the error.
 
+use super::rich::Rich;
 use super::{App, Mode, label};
 use crate::imap::Cmd;
+use crate::rich;
+use crate::smtp::{self, Draft, Inline};
+use crate::store::Row;
 use crate::{mailto, message};
-use crate::smtp::{self, Draft};
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use std::cell::{Cell, RefCell};
@@ -21,12 +24,15 @@ pub struct Compose {
     subject: gtk::Entry,
     files_label: gtk::Label,
     suggest: gtk::Label,
-    body: gtk::TextView,
-    files: RefCell<Vec<PathBuf>>,
+    pub body: gtk::TextView,
+    pub rich: Rich,
+    pub files: RefCell<Vec<PathBuf>>,
     in_reply_to: RefCell<String>,
     references: RefCell<String>,
     /// The message replied to, to flag it \Answered after sending.
     reply_of: RefCell<Option<(usize, String, u32)>>,
+    /// The draft this message was opened from (E), replaced when it is saved or sent.
+    draft_of: RefCell<Option<Row>>,
     esc_armed: Cell<bool>,
     pristine: RefCell<String>,
 }
@@ -74,12 +80,10 @@ impl Compose {
         let files_label = label("", "r-attach");
         head.append(&files_label);
         root.append(&head);
-        let body = gtk::TextView::new();
-        body.add_css_class("editor");
-        body.set_wrap_mode(gtk::WrapMode::WordChar);
-        body.set_accepts_tab(false);
-        let scroll = gtk::ScrolledWindow::builder().child(&body).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).build();
-        root.append(&scroll);
+        let rich = Rich::new();
+        root.append(&rich.bar);
+        root.append(&rich.area);
+        let body = rich.view.clone().upcast();
         Compose {
             root,
             title,
@@ -92,16 +96,19 @@ impl Compose {
             files_label,
             suggest,
             body,
+            rich,
             files: RefCell::new(Vec::new()),
             in_reply_to: RefCell::new(String::new()),
             references: RefCell::new(String::new()),
             reply_of: RefCell::new(None),
+            draft_of: RefCell::new(None),
             esc_armed: Cell::new(false),
             pristine: RefCell::new(String::new()),
         }
     }
 
     pub fn wire(&self, app: &Rc<App>) {
+        self.rich.wire(app);
         for e in [&self.to, &self.cc, &self.bcc] {
             let me = Rc::downgrade(app);
             e.connect_changed(move |e| {
@@ -121,26 +128,35 @@ impl Compose {
     }
 
     fn state(&self) -> String {
-        let b = self.body.buffer();
-        format!("{}|{}|{}|{}|{}|{}", self.to.text(), self.cc.text(), self.bcc.text(), self.subject.text(), b.text(&b.start_iter(), &b.end_iter(), false), self.files.borrow().len())
+        let body = if self.rich.on.get() { rich::to_html(&self.rich.read()) } else { self.rich.plain_text() };
+        format!("{}|{}|{}|{}|{}|{}", self.to.text(), self.cc.text(), self.bcc.text(), self.subject.text(), body, self.files.borrow().len())
     }
 
+    /// The message; HTML only when formatting is used.
     fn draft(&self) -> Draft {
-        let b = self.body.buffer();
-        Draft {
+        let mut d = Draft {
             to: self.to.text().into(),
             cc: self.cc.text().into(),
             bcc: self.bcc.text().into(),
             subject: self.subject.text().into(),
-            body: b.text(&b.start_iter(), &b.end_iter(), false).into(),
+            body: self.rich.plain_text(),
             in_reply_to: self.in_reply_to.borrow().clone(),
             references: self.references.borrow().clone(),
             attachments: self.files.borrow().clone(),
             ..Default::default()
+        };
+        if self.rich.on.get() {
+            let doc = self.rich.read();
+            d.body = rich::to_plain(&doc, false);
+            if !rich::is_plain(&doc) {
+                d.html = Some(rich::to_html(&doc));
+                d.inline = self.rich.inline_parts(&doc);
+            }
         }
+        d
     }
 
-    fn update_files(&self) {
+    pub fn update_files(&self) {
         let files = self.files.borrow();
         if files.is_empty() {
             self.files_label.set_visible(false);
@@ -184,7 +200,19 @@ impl App {
         c.cc.set_text(&d.cc);
         c.bcc.set_text(&d.bcc);
         c.subject.set_text(&d.subject);
-        c.body.buffer().set_text(&d.body);
+        let rich_on = d.html.is_some() || self.cfg.borrow().compose != "plain";
+        c.rich.set_on(rich_on);
+        c.rich.bar.set_visible(self.cfg.borrow().toolbar);
+        if rich_on {
+            let doc = match &d.html {
+                Some(h) => rich::from_html(h),
+                None => rich::from_plain(&d.body, false),
+            };
+            let parts: Vec<(String, String, Vec<u8>)> = d.inline.iter().map(|i| (i.cid.clone(), i.mime.clone(), i.data.clone())).collect();
+            c.rich.load(&doc, Rich::images_from(&parts));
+        } else {
+            c.rich.load_plain(&d.body);
+        }
         *c.files.borrow_mut() = d.attachments.clone();
         *c.in_reply_to.borrow_mut() = d.in_reply_to.clone();
         *c.references.borrow_mut() = d.references.clone();
@@ -206,6 +234,7 @@ impl App {
 
     fn close_compose(self: &Rc<Self>) {
         self.toast("", false);
+        self.compose.rich.link_pop.popdown();
         self.stack.set_visible_child_name("main");
         self.set_mode(Mode::Normal);
         self.set_focus(self.focus.get());
@@ -226,6 +255,7 @@ impl App {
     }
 
     pub fn compose_new(self: &Rc<Self>) {
+        self.compose.draft_of.borrow_mut().take();
         let acct = self.current_acct();
         *self.compose.reply_of.borrow_mut() = None;
         self.open_compose(acct, Draft { body: self.signature(acct), ..Default::default() }, "new message");
@@ -253,6 +283,7 @@ impl App {
         }
         let acct = self.current_acct();
         d.body += &self.signature(acct);
+        self.compose.draft_of.borrow_mut().take();
         *c.reply_of.borrow_mut() = None;
         self.open_compose(acct, d, "new message");
     }
@@ -288,6 +319,7 @@ impl App {
             references: p.references.clone(),
             ..Default::default()
         };
+        self.compose.draft_of.borrow_mut().take();
         *self.compose.reply_of.borrow_mut() = Some((acct, row.folder.clone(), row.uid));
         self.open_compose(acct, d, if all { "reply all" } else { "reply" });
     }
@@ -320,8 +352,56 @@ impl App {
             p.text
         );
         let d = Draft { subject: message::prefixed("Fwd:", &p.subject), body, attachments: files, ..Default::default() };
+        self.compose.draft_of.borrow_mut().take();
         *self.compose.reply_of.borrow_mut() = None;
         self.open_compose(acct, d, "forward");
+    }
+
+    /// E: the open message in the composer with its formatting, images and attachments. A draft
+    /// is replaced by the next save or send.
+    pub fn compose_edit(self: &Rc<Self>) {
+        let Some((row, Some(p))) = self.current.borrow().clone() else {
+            self.toast("open a message first", true);
+            return;
+        };
+        let acct = self.acct_idx(&row.acct).unwrap_or(0);
+        let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(format!("brief/edit-{}", row.uid));
+        let _ = std::fs::create_dir_all(&dir);
+        let files: Vec<PathBuf> = p
+            .attachments
+            .iter()
+            .filter_map(|a| {
+                let path = dir.join(a.name.replace(['/', '\\'], "_"));
+                std::fs::write(&path, &a.data).ok().map(|_| path)
+            })
+            .collect();
+        // References of a reply end with the message it answers
+        let mut refs: Vec<&str> = p.references.split_whitespace().collect();
+        let in_reply_to = refs.pop().unwrap_or_default().to_owned();
+        let d = Draft {
+            to: p.to.join(", "),
+            cc: p.cc.join(", "),
+            subject: if p.subject == "(no subject)" { String::new() } else { p.subject.clone() },
+            body: p.text.clone(),
+            html: p.html.clone().filter(|h| rich::is_ours(h)),
+            inline: p.inline.iter().map(|(cid, mime, data)| Inline { cid: cid.clone(), mime: mime.clone(), data: data.clone() }).collect(),
+            in_reply_to,
+            references: refs.join(" "),
+            attachments: files,
+            ..Default::default()
+        };
+        let is_draft = self.folder_with_role(acct, "drafts").as_deref() == Some(row.folder.as_str());
+        *self.compose.reply_of.borrow_mut() = None;
+        *self.compose.draft_of.borrow_mut() = is_draft.then(|| row.clone());
+        self.open_compose(acct, d, if is_draft { "draft" } else { "edit as new" });
+    }
+
+    /// The saved draft a message replaced: off the server and the list.
+    fn drop_draft(self: &Rc<Self>, row: Row) {
+        if let Some(i) = self.acct_idx(&row.acct) {
+            self.send(i, Cmd::Delete { folder: row.folder.clone(), uids: vec![row.uid] });
+        }
+        self.remove_rows(&[row]);
     }
 
     fn update_suggest(&self, e: &gtk::Entry) {
@@ -364,6 +444,9 @@ impl App {
         if k != "Escape" {
             c.esc_armed.set(false);
         }
+        if let Some(used) = self.rich_key(k) {
+            return used;
+        }
         match k {
             "C-Return" | "C-KP_Enter" => self.send_draft(),
             "Escape" => {
@@ -388,7 +471,7 @@ impl App {
         true
     }
 
-    fn send_draft(self: &Rc<Self>) {
+    pub(super) fn send_draft(self: &Rc<Self>) {
         let c = &self.compose;
         let d = c.draft();
         let acct_idx = c.from.selected() as usize;
@@ -398,6 +481,7 @@ impl App {
             return;
         }
         let reply_of = c.reply_of.borrow().clone();
+        let draft_of = c.draft_of.borrow_mut().take();
         self.close_compose();
         self.toast(&format!("sending to {}…", d.to), false);
         let (tx, rx) = async_channel::bounded(1);
@@ -414,6 +498,9 @@ impl App {
                     if !smtp::server_saves_sent(&acc) {
                         app.send(acct_idx, Cmd::Append { role: "sent", raw });
                     }
+                    if let Some(row) = draft_of {
+                        app.drop_draft(row);
+                    }
                     if let Some((i, folder, uid)) = reply_of {
                         app.store.borrow().set_flag(&app.accounts.borrow()[i].name, &folder, uid, "answered", true);
                         app.send(i, Cmd::Flag { folder, uids: vec![uid], flag: "\\Answered", on: true });
@@ -424,6 +511,7 @@ impl App {
                     let title = format!("not sent: {e}");
                     app.open_compose(acct_idx, d, &title);
                     *app.compose.reply_of.borrow_mut() = reply_of;
+                    *app.compose.draft_of.borrow_mut() = draft_of;
                     app.toast(&title, true);
                 }
                 Err(_) => {}
@@ -431,7 +519,7 @@ impl App {
         });
     }
 
-    fn save_draft(self: &Rc<Self>) {
+    pub(super) fn save_draft(self: &Rc<Self>) {
         let c = &self.compose;
         let mut d = c.draft();
         let acct = c.from.selected() as usize;
@@ -446,6 +534,9 @@ impl App {
                     return;
                 }
                 self.send(acct, Cmd::Append { role: "drafts", raw: m.formatted() });
+                if let Some(row) = c.draft_of.borrow_mut().take() {
+                    self.drop_draft(row);
+                }
                 *c.pristine.borrow_mut() = c.state();
                 self.toast("draft saved", false);
             }
@@ -454,12 +545,23 @@ impl App {
     }
 
     /// Ctrl+E: the body in $EDITOR, in a terminal window, read back when it closes.
-    fn external_editor(self: &Rc<Self>) {
+    pub(super) fn external_editor(self: &Rc<Self>) {
         let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("brief");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("compose.eml.txt");
-        let b = self.compose.body.buffer();
-        if std::fs::write(&path, b.text(&b.start_iter(), &b.end_iter(), false).as_str()).is_err() {
+        let r = &self.compose.rich;
+        let rich_on = r.on.get();
+        let text = if rich_on {
+            let doc = r.read();
+            if rich::has_inline(&doc) {
+                self.toast("Ctrl+E edits plain text and this message has bold, links or images; Ctrl+Shift+M makes it plain", true);
+                return;
+            }
+            rich::to_plain(&doc, true)
+        } else {
+            r.plain_text()
+        };
+        if std::fs::write(&path, text).is_err() {
             return;
         }
         let mut cmd = crate::platform::editor(&self.cfg.borrow().editor, &path);
@@ -474,7 +576,12 @@ impl App {
             if let Ok((ok, text)) = rx.recv().await {
                 match text {
                     Some(t) if ok => {
-                        app.compose.body.buffer().set_text(&t);
+                        // lists, quotes and headings come back from their `- `, `> `, `# ` lines
+                        if rich_on {
+                            app.compose.rich.load(&rich::from_plain(&t, true), Vec::new());
+                        } else {
+                            app.compose.rich.load_plain(&t);
+                        }
                         app.toast("", false);
                     }
                     _ => app.toast("editor failed; set `editor` in the config", true),
@@ -485,7 +592,7 @@ impl App {
         });
     }
 
-    fn pick_files(self: &Rc<Self>) {
+    pub(super) fn pick_files(self: &Rc<Self>) {
         let dialog = gtk::FileDialog::builder().title("Attach").modal(true).build();
         let app = self.clone();
         dialog.open_multiple(Some(&self.win), None::<&gio::Cancellable>, move |res| {
