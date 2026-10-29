@@ -6,6 +6,14 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_dry_run:
+        description: Run the release job without publishing; the would-be release is uploaded as artifact release-dry-run
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
   linux:
@@ -202,3 +210,65 @@ jobs:
           path: dist/screenshot.png
           if-no-files-found: ignore
 
+  # On a v* tag: a GitHub release. From workflow_dispatch with release_dry_run: the same files and
+  # notes as artifact release-dry-run, nothing published.
+  release:
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_dry_run)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: brief-*
+          path: dl
+      - name: assemble
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [[ $GITHUB_REF == refs/tags/* && $GITHUB_REF_NAME != "v$version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
+            exit 1
+          fi
+          mkdir release
+          cp "dl/brief-setup-x86_64/brief-$version-setup-x86_64.exe" release/
+          mv dl/brief-windows-x86_64-portable dl/brief
+          (cd dl && zip -qr9 "../release/brief-$version-windows-x86_64-portable.zip" brief)
+          cp "dl/brief-linux-x86_64/brief-$version-linux-x86_64.tar.gz" release/
+          (cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+
+          prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
+          {
+            echo "## Downloads"
+            echo
+            echo "- **Windows installer**: \`brief-$version-setup-x86_64.exe\`. Installs for your user, no admin needed."
+            echo "- **Windows portable**: \`brief-$version-windows-x86_64-portable.zip\`. Unzip anywhere, run \`brief.exe\`."
+            echo "- **Linux x86_64**: \`brief-$version-linux-x86_64.tar.gz\`. Built on Ubuntu 24.04: needs glibc 2.39+, GTK 4.14+ and WebKitGTK 6.0 (Ubuntu 24.04+, Debian 13+, Fedora 40+, Arch). See \`INSTALL.txt\` inside."
+            echo "- \`SHA256SUMS\` to check them: \`sha256sum -c SHA256SUMS --ignore-missing\`."
+            echo
+            echo "The Windows builds are not code-signed, so SmartScreen may warn on the first start: More info, then Run anyway."
+            echo
+            echo "## Changes${prev:+ since $prev}"
+            echo
+            git log --no-merges --format='- %s' ${prev:+$prev..}HEAD
+          } > notes.md
+          cat notes.md
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: publish
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=; [[ $VERSION == *-* ]] && pre=--prerelease
+          gh release create "$GITHUB_REF_NAME" release/* --verify-tag $pre --title "brief $VERSION" --notes-file notes.md
+      - name: dry run
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dry-run
+          path: |
+            release
+            notes.md
