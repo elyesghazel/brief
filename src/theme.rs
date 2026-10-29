@@ -31,6 +31,8 @@ const BUILTIN: &[Builtin] = &[
     Builtin { name: "everforest-dark",  colors: ["#2d353b", "#d3c6aa", "#9da9a0", "#7a8478", "#4f585e", "#a7c080", "#a7c080", "#3d484d", "#343f44", "#e67e80", "#dbbc7f"] },
     Builtin { name: "dracula",          colors: ["#282a36", "#f8f8f2", "#bfc4de", "#6272a4", "#44475a", "#bd93f9", "#50fa7b", "#44475a", "#343746", "#ff5555", "#f1fa8c"] },
     Builtin { name: "kanagawa",         colors: ["#1f1f28", "#dcd7ba", "#c8c093", "#727169", "#54546d", "#7e9cd8", "#98bb6c", "#2d4f67", "#2a2a37", "#e82424", "#e6c384"] },
+    Builtin { name: "eg",               colors: ["#000000", "#ffffff", "#a6a6a6", "#8a8a8a", "#2e2e2e", "#ffffff", "#6cc28a", "#1c1c1c", "#141414", "#ff5f56", "#d9ad5b"] },
+    Builtin { name: "eg-light",         colors: ["#fafafa", "#0a0a0a", "#555555", "#707070", "#d0d0d0", "#0a0a0a", "#1e7a44", "#ececec", "#f0f0f0", "#d0201f", "#8f5f00"] },
     Builtin { name: "one-dark",         colors: ["#282c34", "#abb2bf", "#828997", "#5c6370", "#4b5263", "#61afef", "#98c379", "#3e4451", "#2c313c", "#e06c75", "#e5c07b"] },
 ];
 
@@ -71,8 +73,31 @@ fn user_css(name: &str) -> Option<String> {
     fs::read_to_string(dir().join(&file)).or_else(|_| fs::read_to_string(zunder_dir().join(&file))).ok()
 }
 
+/// The elyesghazel.ch design kit: monochrome, JetBrains Mono for the chrome, grey initials.
+/// Mail text keeps the configured font.
+const EG_CSS: &str = r#"
+.brand, .path, .sync, .statusbar, .mode, .key, .desc, .side-acct-name, .side-acct-mail, .side-key,
+.pill, .msg-date, .dialog-title, .form-label, .form-hint, .form-ok, .form-error, .r-note, .chip-size,
+.empty-title {
+  font-family: "JetBrains Mono", "JetBrainsMono Nerd Font", monospace;
+}
+.brand { letter-spacing: -0.02em; }
+.dialog-title, .side-acct-name { letter-spacing: 0.08em; }
+.statusbar, list.side { background: @bg; }
+.avatar-c0, .avatar-c1, .avatar-c2, .avatar-c3, .avatar-c4, .avatar-c5, .avatar-c6, .avatar-c7 {
+  background: @sel; box-shadow: inset 0 0 0 1px @ghost;
+}
+.avatar-initials { color: @fg; }
+.msg.marked { background: alpha(@fg, 0.08); }
+.msg.marked .msg-dot { color: @fg; }
+"#;
+
 fn builtin_css(t: &Builtin) -> String {
-    COLORS.iter().zip(t.colors).map(|(name, value)| format!("@define-color {name} {value};\n")).collect()
+    let mut css: String = COLORS.iter().zip(t.colors).map(|(name, value)| format!("@define-color {name} {value};\n")).collect();
+    if t.name.starts_with("eg") {
+        css += EG_CSS;
+    }
+    css
 }
 
 /// Every theme name: `zunder`, the built-ins, then user themes (brief's and zunder's).
