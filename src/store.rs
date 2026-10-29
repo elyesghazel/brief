@@ -54,6 +54,12 @@ pub struct Row {
     pub answered: bool,
     pub attach: bool,
     pub preview: String,
+    pub msgid: String,
+    pub refs: String,
+    /// Messages in the conversation this row stands for; 0 outside thread mode.
+    pub count: u32,
+    /// "Lea, Tom, me" for a conversation row; empty for a single message.
+    pub people: String,
 }
 
 /// What the message list shows.
@@ -70,7 +76,10 @@ pub fn path() -> PathBuf {
 
 impl Store {
     pub fn open() -> rusqlite::Result<Store> {
-        let path = path();
+        Self::open_at(&path())
+    }
+
+    fn open_at(path: &std::path::Path) -> rusqlite::Result<Store> {
         let _ = std::fs::create_dir_all(path.parent().unwrap());
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(10))?;
@@ -94,10 +103,12 @@ impl Store {
             CREATE TABLE IF NOT EXISTS msgs(
                 acct TEXT, folder TEXT, uid INT, msgid TEXT, subject TEXT, from_name TEXT, from_addr TEXT,
                 to_addr TEXT, cc_addr TEXT, date INT, seen INT, flagged INT, answered INT, attach INT,
-                size INT, refs TEXT, preview TEXT DEFAULT '', raw BLOB, PRIMARY KEY(acct, folder, uid));
+                size INT, refs TEXT, preview TEXT DEFAULT '', raw BLOB, troot TEXT DEFAULT '',
+                PRIMARY KEY(acct, folder, uid));
             CREATE INDEX IF NOT EXISTS msgs_date ON msgs(acct, folder, date DESC);
             CREATE TABLE IF NOT EXISTS trusted(domain TEXT PRIMARY KEY);",
         )?;
+        migrate(&db)?;
         Ok(Store { db })
     }
 
@@ -215,15 +226,15 @@ impl Store {
             let mut st = tx
                 .prepare_cached(
                     "INSERT INTO msgs(acct, folder, uid, msgid, subject, from_name, from_addr, to_addr, cc_addr, date,
-                        seen, flagged, answered, attach, size, refs)
-                     VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                        seen, flagged, answered, attach, size, refs, troot)
+                     VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
                      ON CONFLICT(acct, folder, uid) DO UPDATE SET seen = ?11, flagged = ?12, answered = ?13",
                 )
                 .unwrap();
             for h in headers {
                 st.execute(params![
                     acct, folder, h.uid, h.msgid, h.subject, h.from_name, h.from_addr, h.to, h.cc, h.date, h.seen,
-                    h.flagged, h.answered, h.attach, h.size, h.refs
+                    h.flagged, h.answered, h.attach, h.size, h.refs, root_of(&h.msgid, &h.refs)
                 ])
                 .unwrap();
             }
@@ -319,7 +330,7 @@ impl Store {
     pub fn list(&self, view: &View, query: &str, limit: u32) -> Vec<Row> {
         let mut sql = String::from(
             "SELECT m.acct, m.folder, m.uid, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, m.seen, m.flagged,
-                    m.answered, m.attach, m.preview FROM msgs m ",
+                    m.answered, m.attach, m.preview, m.msgid, m.refs FROM msgs m ",
         );
         let mut args: Vec<String> = Vec::new();
         match view {
@@ -350,26 +361,49 @@ impl Store {
         }
         sql += &format!("ORDER BY m.date DESC LIMIT {limit}");
         let mut st = self.db.prepare(&sql).unwrap();
-        st.query_map(rusqlite::params_from_iter(args.iter()), |r| {
-            Ok(Row {
-                acct: r.get(0)?,
-                folder: r.get(1)?,
-                uid: r.get(2)?,
-                subject: r.get(3)?,
-                from_name: r.get(4)?,
-                from_addr: r.get(5)?,
-                to: r.get(6)?,
-                date: r.get(7)?,
-                seen: r.get(8)?,
-                flagged: r.get(9)?,
-                answered: r.get(10)?,
-                attach: r.get(11)?,
-                preview: r.get(12)?,
-            })
-        })
-        .unwrap()
-        .flatten()
-        .collect()
+        st.query_map(rusqlite::params_from_iter(args.iter()), row).unwrap().flatten().collect()
+    }
+
+    /// Messages in inboxes, Sent and archives outside `view` whose thread root is one of `ids`, for
+    /// conversations that span folders.
+    pub fn thread_mates(&self, ids: &[&str], view: &View) -> Vec<Row> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let mut json = String::from("[");
+        for (i, id) in ids.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push('"');
+            for c in id.chars() {
+                match c {
+                    '"' | '\\' => {
+                        json.push('\\');
+                        json.push(c);
+                    }
+                    c if c.is_control() => {}
+                    c => json.push(c),
+                }
+            }
+            json.push('"');
+        }
+        json.push(']');
+        let mut st = self
+            .db
+            .prepare_cached(
+                "SELECT m.acct, m.folder, m.uid, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, m.seen, m.flagged,
+                    m.answered, m.attach, m.preview, m.msgid, m.refs FROM msgs m
+                 JOIN folders f ON f.acct = m.acct AND f.name = m.folder
+                 WHERE m.troot IN (SELECT value FROM json_each(?1)) AND f.role IN ('inbox', 'sent', 'archive')
+                    AND NOT (f.role = 'inbox' AND ?2 = '') AND NOT (m.acct = ?2 AND m.folder = ?3)",
+            )
+            .unwrap();
+        let (acct, folder) = match view {
+            View::Unified => ("", ""),
+            View::Folder { acct, folder } => (acct.as_str(), folder.as_str()),
+        };
+        st.query_map(params![json, acct, folder], row).unwrap().flatten().collect()
     }
 
     /// Unseen count of every account's inbox.
@@ -396,6 +430,57 @@ impl Store {
         .flatten()
         .collect()
     }
+}
+
+fn row(r: &rusqlite::Row) -> rusqlite::Result<Row> {
+    Ok(Row {
+        acct: r.get(0)?,
+        folder: r.get(1)?,
+        uid: r.get(2)?,
+        subject: r.get(3)?,
+        from_name: r.get(4)?,
+        from_addr: r.get(5)?,
+        to: r.get(6)?,
+        date: r.get(7)?,
+        seen: r.get(8)?,
+        flagged: r.get(9)?,
+        answered: r.get(10)?,
+        attach: r.get(11)?,
+        preview: r.get(12)?,
+        msgid: r.get::<_, Option<String>>(13)?.unwrap_or_default(),
+        refs: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
+        count: 0,
+        people: String::new(),
+    })
+}
+
+/// The first id of References (the thread's start), else the message's own id.
+pub fn root_of<'a>(msgid: &'a str, refs: &'a str) -> &'a str {
+    refs.split_whitespace().next().unwrap_or(msgid)
+}
+
+/// Adds the thread root column to caches from before threading, in one locked step so workers
+/// opening the cache together do not race.
+fn migrate(db: &Connection) -> rusqlite::Result<()> {
+    let has = |db: &Connection| -> rusqlite::Result<bool> {
+        Ok(db.prepare("SELECT 1 FROM pragma_table_info('msgs') WHERE name = 'troot'")?.exists([])?)
+    };
+    if !has(db)? {
+        db.execute_batch("BEGIN IMMEDIATE")?;
+        let done: rusqlite::Result<()> = (|| {
+            if !has(db)? {
+                db.execute_batch(
+                    "ALTER TABLE msgs ADD COLUMN troot TEXT DEFAULT '';
+                     UPDATE msgs SET troot = CASE WHEN TRIM(COALESCE(refs, '')) = '' THEN COALESCE(msgid, '')
+                        ELSE substr(TRIM(refs), 1, instr(TRIM(refs) || ' ', ' ') - 1) END;",
+                )?;
+            }
+            Ok(())
+        })();
+        db.execute_batch(if done.is_ok() { "COMMIT" } else { "ROLLBACK" })?;
+        done?;
+    }
+    db.execute_batch("CREATE INDEX IF NOT EXISTS msgs_troot ON msgs(troot)")
 }
 
 /// Sidebar order: inbox first, then the special folders, then the rest by name.
@@ -464,12 +549,59 @@ mod tests {
         let (acct, folder): (String, String) =
             s.db.query_row("SELECT acct, name FROM folders WHERE role = 'inbox'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         let view = View::Folder { acct, folder };
-        let runs = 50;
-        let t = std::time::Instant::now();
-        let mut n = 0;
-        for _ in 0..runs {
-            n = std::hint::black_box(s.list(&view, "", 5000)).len();
+        let me = vec!["me@example.com".to_owned()];
+        let median = |f: &dyn Fn() -> usize| {
+            let mut times: Vec<_> = (0..51)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    std::hint::black_box(f());
+                    t.elapsed()
+                })
+                .collect();
+            times.sort();
+            (f(), times[25])
+        };
+        let (n, plain) = median(&|| s.list(&view, "", 5000).len());
+        let (c, threaded) = median(&|| crate::thread::conversations(&s, &view, s.list(&view, "", 5000), &me).0.len());
+        eprintln!("median of 51: list {n} rows {plain:?}, as {c} conversations {threaded:?}");
+    }
+
+    #[test]
+    fn old_cache_gets_thread_roots() {
+        let dir = std::env::temp_dir().join(format!("brief-test-migrate-{}", std::process::id()));
+        let path = dir.join("mail.db");
+        let _ = std::fs::create_dir_all(&dir);
+        {
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(
+                "CREATE TABLE folders(acct TEXT, name TEXT, delim TEXT, role TEXT, unseen INT DEFAULT 0, total INT DEFAULT 0,
+                    uidvalidity INT DEFAULT 0, PRIMARY KEY(acct, name));
+                CREATE TABLE msgs(acct TEXT, folder TEXT, uid INT, msgid TEXT, subject TEXT, from_name TEXT, from_addr TEXT,
+                    to_addr TEXT, cc_addr TEXT, date INT, seen INT, flagged INT, answered INT, attach INT,
+                    size INT, refs TEXT, preview TEXT DEFAULT '', raw BLOB, PRIMARY KEY(acct, folder, uid));
+                INSERT INTO folders VALUES('a', 'INBOX', '/', 'inbox', 0, 0, 1), ('a', 'Sent', '/', 'sent', 0, 0, 1);
+                INSERT INTO msgs VALUES
+                    ('a', 'INBOX', 1, '<a@x>', 'Plan', '', 'l@x', 'me@x', '', 1, 1, 0, 0, 0, 9, '', '', NULL),
+                    ('a', 'INBOX', 2, '<c@x>', 'Re: Plan', '', 'l@x', 'me@x', '', 3, 1, 0, 0, 0, 9, '<a@x> <b@x>', '', NULL),
+                    ('a', 'Sent', 1, '<b@x>', 'Re: Plan', '', 'me@x', 'l@x', '', 2, 1, 0, 0, 0, 9, '<a@x>', '', NULL),
+                    ('a', 'Sent', 2, '<z@x>', 'Other', '', 'me@x', 'l@x', '', 2, 1, 0, 0, 0, 9, NULL, '', NULL);",
+            )
+            .unwrap();
         }
-        eprintln!("list: {n} rows in {:?}", t.elapsed() / runs);
+        let mut s = Store::open_at(&path).unwrap();
+        let roots: Vec<String> =
+            s.db.prepare("SELECT troot FROM msgs ORDER BY folder, uid").unwrap().query_map([], |r| r.get(0)).unwrap().flatten().collect();
+        assert_eq!(roots, ["<a@x>", "<a@x>", "<a@x>", "<z@x>"]);
+        assert_eq!(s.thread_mates(&["<a@x>"], &View::Folder { acct: "b".into(), folder: "INBOX".into() }).len(), 3);
+        let inbox = View::Folder { acct: "a".into(), folder: "INBOX".into() };
+        assert_eq!(s.thread_mates(&["<a@x>"], &inbox).len(), 1);
+        assert_eq!(s.thread_mates(&["<a@x>"], &View::Unified).len(), 1);
+        // a second open finds the column and leaves it alone
+        drop(s);
+        s = Store::open_at(&path).unwrap();
+        let h = Header { msgid: "<d@x>".into(), refs: "<a@x> <c@x>".into(), ..header(3, "Re: Plan", 4) };
+        s.put_headers("a", "INBOX", &[h]);
+        assert_eq!(s.thread_mates(&["<a@x>", "\"odd\\id"], &View::Folder { acct: "b".into(), folder: "x".into() }).len(), 4);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
