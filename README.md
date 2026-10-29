@@ -179,6 +179,21 @@ client_secret = "GOCSPX-..."
 `[oauth.microsoft]` with your own Entra ID app (public client, redirect `http://localhost`,
 `IMAP.AccessAsUser.All`, `SMTP.Send`, `offline_access`) works the same way.
 
+## Settings
+
+`,` (or `Ctrl+,`, or ☰ -> **Settings**) opens the settings: Appearance, Reading, Writing,
+Accounts, Sync & notifications, Keyboard and About. Everything applies at once and is saved to
+`config.toml` right away. brief changes only the line of that setting and keeps your comments
+and order; if a hand-edited file is too unusual to change safely, it says so and leaves it alone.
+
+`j` `k` move, `Tab` (or `1`-`7`) switches section, `Enter` toggles or edits, `h` `l` change a
+choice, `/` finds a setting, `Esc` goes back. Accounts: rename (the offline mail moves along),
+your name, color, signature, servers with a **Test**, sign in again, remove. About has the
+config, cache and log paths and a **Check for updates** that only asks GitHub when you press it.
+
+Warnings and errors also go to `brief.log` in the cache folder (rotated at ~1 MB, never
+passwords or tokens), handy when brief runs from a launcher.
+
 ## Keys
 
 `?` shows all of them in the app, `Ctrl+K` lists every command.
@@ -201,6 +216,7 @@ client_secret = "GOCSPX-..."
 | `Ctrl+=` `Ctrl+-` `Ctrl+0` | zoom the HTML view |
 | `Ctrl+R` | fetch new mail on every account |
 | `t` | theme picker with live preview |
+| `,` `Ctrl+,` | settings |
 | `A` | add account |
 | mailto: link in a mail, or `L` -> link | write to it in brief's composer |
 
@@ -254,6 +270,7 @@ Your own: `~/.config/brief/themes/<name>.css` with `@define-color` lines for
 | `editor` | `$TERMINAL -e $EDITOR` | for `Ctrl+E`, e.g. `"kitty -e nvim"` |
 | `compose` | `"rich"` | `"plain"` starts the composer without formatting |
 | `toolbar` | `true` | formatting bar in the composer |
+| `mark_read_ms` | `700` | an open message counts as read after this long; `-1` = never |
 | `threads` | `true` | one row per conversation, your Sent replies included; `Ctrl+K` toggles it |
 
 ## CLI
