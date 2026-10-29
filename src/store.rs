@@ -454,4 +454,22 @@ mod tests {
         assert_eq!(s.list(&view, "", 50).len(), 1);
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    /// List build time on a big cache:
+    /// `XDG_CACHE_HOME=<dir> cargo test --release bench_list -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_list() {
+        let s = Store::open().unwrap();
+        let (acct, folder): (String, String) =
+            s.db.query_row("SELECT acct, name FROM folders WHERE role = 'inbox'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let view = View::Folder { acct, folder };
+        let runs = 50;
+        let t = std::time::Instant::now();
+        let mut n = 0;
+        for _ in 0..runs {
+            n = std::hint::black_box(s.list(&view, "", 5000)).len();
+        }
+        eprintln!("list: {n} rows in {:?}", t.elapsed() / runs);
+    }
 }

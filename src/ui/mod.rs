@@ -1090,9 +1090,11 @@ impl App {
     }
 
     pub fn reload_list(&self) {
+        let t0 = std::time::Instant::now();
         let query = self.search.text().to_string();
         let limit = self.cfg.borrow().cache_limit.max(200) * if *self.view.borrow() == View::Unified { 2 } else { 1 };
         let rows = self.store.borrow().list(&self.view.borrow(), &query, limit);
+        let built = t0.elapsed();
         let selected = self.rows.borrow().get(self.list_sel.selected() as usize).map(key);
         let same = {
             let old = self.rows.borrow();
@@ -1105,6 +1107,7 @@ impl App {
             self.update_empty();
             return;
         }
+        let n = rows.len();
         let objs: Vec<glib::BoxedAnyObject> = rows.iter().cloned().map(glib::BoxedAnyObject::new).collect();
         *self.rows.borrow_mut() = rows;
         let new_pos = selected.and_then(|k| self.rows.borrow().iter().position(|r| key(r) == k));
@@ -1120,6 +1123,9 @@ impl App {
             }
         }
         self.update_empty();
+        if std::env::var_os("BRIEF_DEBUG_LIST").is_some() {
+            eprintln!("list {n} rows: built {built:?}, shown {:?}", t0.elapsed());
+        }
     }
 
     fn update_empty(&self) {
