@@ -11,7 +11,7 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -22,13 +22,14 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
-    env:
-      CARGO_HOME: ${{ github.workspace }}\..\cargo-home
     defaults:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      # cargo's home next to the checkout, so the cache can hold the registry
+      - shell: pwsh
+        run: '"CARGO_HOME=$env:RUNNER_WORKSPACE\cargo-home" >> $env:GITHUB_ENV'
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -43,10 +44,10 @@ jobs:
             gcc:p
             rust:p
             ntldd:p
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
-            ${{ github.workspace }}\..\cargo-home\registry
+            ${{ runner.workspace }}\cargo-home\registry
             target
           key: windows-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: windows-cargo-
@@ -88,11 +89,11 @@ jobs:
             if (-not $alive -or $ms -ge 30000) { throw "the window did not come up" }
             Write-Host "window up after $ms ms ($run)"
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: brief-windows-x86_64
           path: dist/brief
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: screenshot
