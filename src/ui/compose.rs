@@ -554,7 +554,7 @@ impl App {
         let text = if rich_on {
             let doc = r.read();
             if rich::has_inline(&doc) {
-                self.toast("Ctrl+E edits plain text and this message has bold, links or images; Ctrl+Shift+M makes it plain", true);
+                self.toast("$EDITOR is plain text only: Ctrl+Shift+M first", true);
                 return;
             }
             rich::to_plain(&doc, true)

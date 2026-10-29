@@ -613,6 +613,7 @@ impl Rich {
         }
         let (s, e) = (buf.iter_at_offset(self.insert_at.get()), buf.iter_at_offset(end));
         self.set_lines_block(&s, &e, block);
+        self.update_bar();
     }
 
     pub fn update_bar(&self) {
@@ -991,8 +992,16 @@ impl Rich {
         buf.set_text("");
         *self.images.borrow_mut() = images;
         let mut it = buf.start_iter();
+        // runs of lines of one kind get their tag in one go
+        let mut run: Option<(Block, i32)> = None;
         for (i, line) in doc.iter().enumerate() {
             let start = it.offset();
+            if run.is_some_and(|(b, _)| b != line.block) {
+                self.tag_run(run.take(), start);
+            }
+            if run.is_none() && line.block != Block::Para {
+                run = Some((line.block, start));
+            }
             for run in &line.runs {
                 match run {
                     Run::Text(t, style) => {
@@ -1024,17 +1033,20 @@ impl Rich {
             if i + 1 < doc.len() {
                 buf.insert(&mut it, "\n");
             }
-            if line.block != Block::Para {
-                let end = it.offset();
-                let s = buf.iter_at_offset(start);
-                self.set_lines_block(&s, &s, line.block);
-                it = buf.iter_at_offset(end);
-            }
         }
+        self.tag_run(run, buf.end_iter().offset());
         buf.end_irreversible_action();
         self.quiet.set(false);
         self.pending.take();
         self.view.queue_draw();
+    }
+
+    fn tag_run(&self, run: Option<(Block, i32)>, end: i32) {
+        let Some((block, start)) = run else { return };
+        if let Some((name, _)) = BLOCKS.iter().find(|(_, k)| *k == block) {
+            let buf = self.buf();
+            buf.apply_tag_by_name(name, &buf.iter_at_offset(start), &buf.iter_at_offset(end));
+        }
     }
 
     /// Plain text in, as it was before rich text.
@@ -1253,8 +1265,9 @@ impl App {
         true
     }
 
-    /// Ctrl+Shift+M: rich text keeps the text and turns `>` lines into quotes; plain text keeps
-    /// the plain form (lists as `- `, links as `text <url>`) and drops the rest.
+    /// Ctrl+Shift+M: plain text gets the plain form (lists as `- `, links as `text <url>`) and
+    /// loses the rest; rich text reads `>`, `- `, `1. ` and `#` lines back as quotes, lists and
+    /// headings.
     pub fn toggle_rich(self: &Rc<Self>) {
         let r = &self.compose.rich;
         let buf = r.buf();
@@ -1267,9 +1280,9 @@ impl App {
             buf.set_text(text.trim_end_matches('\n'));
             buf.end_user_action();
             r.images.borrow_mut().clear();
-            self.toast(if lost { "plain text: formatting removed (Ctrl+Z brings the text back)" } else { "plain text" }, false);
+            self.toast(if lost { "plain text, formatting dropped" } else { "plain text" }, false);
         } else {
-            let doc = rich::from_plain(&r.plain_text(), false);
+            let doc = rich::from_plain(&r.plain_text(), true);
             r.set_on(true);
             r.load(&doc, Vec::new());
             self.toast("rich text", false);
@@ -1287,3 +1300,4 @@ impl App {
         self.compose.rich.update_bar();
     }
 }
+
