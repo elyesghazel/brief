@@ -28,6 +28,8 @@ pub struct Config {
     pub decorations: bool,
     /// Render HTML mail in the window (WebKit). false = always show it as text.
     pub html: bool,
+    /// One list row per conversation, the reader shows the whole conversation.
+    pub threads: bool,
     /// Sender icons: "duckduckgo" (the sender sees nothing), "direct" (sharper, asks the
     /// sender's site), "off" (initials only, never online).
     pub favicons: String,
@@ -47,6 +49,7 @@ impl Default for Config {
             font: crate::platform::FONT.into(),
             font_size: 10.5,
             html: true,
+            threads: true,
             favicons: "duckduckgo".into(),
             sync_minutes: 5,
             cache_limit: 1000,
@@ -252,6 +255,7 @@ theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # font = "Inter, Noto Sans, sans-serif"   # emoji come from Apple Color Emoji when installed
 # font_size = 10.5
 # html = true              # render HTML mail; remote images stay blocked until you press I
+# threads = true           # one row per conversation; Ctrl+K toggles it
 # favicons = "duckduckgo"  # sender icons: "duckduckgo", "direct" (sharper) or "off"
 # sync_minutes = 5        # full sync interval, the inbox is pushed via IDLE anyway
 # cache_limit = 1000      # newest messages kept offline per folder
@@ -324,9 +328,18 @@ impl Config {
 
 /// Replaces (or adds) the top-level `theme = ` line.
 pub fn save_theme(name: &str) {
+    save_value("theme", &format!("\"{name}\""));
+}
+
+/// Replaces (or adds) a top-level `key = value` line, keeping its comment.
+pub fn save_value(key: &str, value: &str) {
     let path = path();
     let text = fs::read_to_string(&path).unwrap_or_default();
-    let line = format!("theme = \"{name}\"");
+    let _ = fs::write(&path, set_value(&text, key, value));
+}
+
+fn set_value(text: &str, key: &str, value: &str) -> String {
+    let line = format!("{key} = {value}");
     let mut done = false;
     let mut out: Vec<String> = Vec::new();
     let mut in_table = false;
@@ -334,7 +347,8 @@ pub fn save_theme(name: &str) {
         if l.trim_start().starts_with('[') {
             in_table = true;
         }
-        if !done && !in_table && l.trim_start().starts_with("theme") && l.contains('=') {
+        let is_key = l.trim_start().strip_prefix(key).is_some_and(|r| r.trim_start().starts_with('='));
+        if !done && !in_table && is_key {
             let comment = l.find('#').map(|i| format!("        {}", &l[i..])).unwrap_or_default();
             out.push(line.clone() + &comment);
             done = true;
@@ -345,7 +359,7 @@ pub fn save_theme(name: &str) {
     if !done {
         out.insert(0, line);
     }
-    let _ = fs::write(&path, out.join("\n") + "\n");
+    out.join("\n") + "\n"
 }
 
 pub fn append_account(acc: &Account) -> std::io::Result<()> {
@@ -510,6 +524,19 @@ smtp = { host = "mail.example.com", port = 587 }
     fn template_parses() {
         let cfg: Config = toml::from_str(TEMPLATE).unwrap();
         assert_eq!(cfg.theme, "graphite");
+        assert!(cfg.threads);
         assert!(cfg.accounts.is_empty());
+    }
+
+    #[test]
+    fn value_lines_replace_or_add() {
+        let text = set_value(TEMPLATE, "threads", "false");
+        let cfg: Config = toml::from_str(&text).unwrap();
+        assert!(!cfg.threads);
+        assert_eq!(cfg.theme, "graphite");
+        let text = set_value(&text, "threads", "true");
+        assert!(text.starts_with("threads = true\n"));
+        let text = set_value(&text, "theme", "\"eg\"");
+        assert!(text.contains("theme = \"eg\"        # Ctrl+T"));
     }
 }
