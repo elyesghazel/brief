@@ -76,6 +76,8 @@ jobs:
       - run: cargo build --release --locked
       - run: cargo test --release --locked
       - run: packaging/windows/bundle.sh dist/brief
+      # brief loads WebView2Loader.dll itself, so it must not be an import: without it brief still starts
+      - run: "! objdump -p dist/brief/brief.exe | grep -i 'DLL Name: WebView2Loader'"
       - name: version info and icon
         shell: pwsh
         run: |

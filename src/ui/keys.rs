@@ -83,7 +83,7 @@ pub fn install(app: &Rc<App>) {
 }
 
 /// Returns true when the key was used.
-fn handle(app: &Rc<App>, k: &str) -> bool {
+pub(super) fn handle(app: &Rc<App>, k: &str) -> bool {
     if matches!(k, "Shift_L" | "Shift_R" | "Control_L" | "Control_R" | "Alt_L" | "Alt_R" | "Super_L" | "Super_R") {
         return false;
     }

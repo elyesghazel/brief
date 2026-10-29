@@ -4,9 +4,9 @@
 //! as an accordion: the other messages collapse to one line each above and below the open one,
 //! which keeps a single body view.
 
-use super::web::{self, Html};
+use super::web::Html;
 use super::widgets::{Avatar, emoji, icon_button};
-use super::{App, Key, find_links, human_size, key, label, long_date, open_uri, short_date};
+use super::{App, Key, Pane, find_links, human_size, key, label, long_date, open_uri, short_date};
 use crate::avatar;
 use crate::imap::Cmd;
 use crate::message::{self, Parsed};
@@ -242,6 +242,24 @@ impl Reader {
         self.web.on_link(move |uri| match me.upgrade() {
             Some(app) => app.open_link(uri),
             None => open_uri(uri),
+        });
+        let me = Rc::downgrade(app);
+        self.web.on_key(move |k| {
+            if let Some(app) = me.upgrade() {
+                super::keys::handle(&app, k);
+            }
+        });
+        let me = Rc::downgrade(app);
+        self.web.on_focus(move || {
+            if let Some(app) = me.upgrade() && app.mode.get() == super::Mode::Normal {
+                app.set_focus(Pane::Reader);
+            }
+        });
+        let me = Rc::downgrade(app);
+        self.web.on_failed(move || {
+            if let Some(app) = me.upgrade() {
+                app.rerender();
+            }
         });
         for (b, action) in &self.buttons {
             let me = Rc::downgrade(app);
@@ -479,18 +497,20 @@ impl App {
                     rd.chips.append(&b);
                 }
                 rd.chips_scroll.set_visible(!p.attachments.is_empty());
-                let use_html = web::AVAILABLE && p.html.is_some() && self.cfg.borrow().html && !self.html_as_text.get();
+                let html_ok = rd.web.available();
+                let use_html = html_ok && p.html.is_some() && self.cfg.borrow().html && !self.html_as_text.get();
                 if use_html {
                     self.show_html(&row, p);
                 } else {
                     let text = p.text.clone();
-                    let note = match (p.html.is_some(), p.from_html, web::AVAILABLE) {
+                    let note = match (p.html.is_some(), p.from_html, html_ok) {
                         (false, ..) => "",
                         (true, true, true) => "HTML mail as text · H shows the HTML",
                         (true, false, true) => "Text version · H shows the HTML",
                         (true, true, false) => "HTML mail as text · o opens it in the browser",
                         (true, false, false) => "Text version · o opens the HTML in the browser",
                     };
+                    let note = rd.web.note().filter(|_| p.html.is_some()).unwrap_or(note);
                     rd.note.set_text(note);
                     rd.note.set_visible(!note.is_empty());
                     self.render_body(&text);
@@ -558,7 +578,7 @@ impl App {
             rd.banner.set_visible(true);
         }
         rd.note.set_visible(false);
-        rd.web.load(&rd.paper, &message::prepare_html(html, &p.inline, allowed), rd.zoom.get());
+        rd.web.load(&rd.paper, &message::prepare_html(html, &p.inline, allowed), rd.zoom.get(), allowed);
         rd.content.set_visible_child_name("html");
         // links for L come from the text version
         *self.links.borrow_mut() = find_links(&p.text).into_iter().map(|(s, e)| p.text[s..e].to_owned()).collect();

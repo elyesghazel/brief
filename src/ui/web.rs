@@ -1,5 +1,6 @@
-//! The HTML view: WebKitGTK where it exists. Without it (Windows, or built without the `webkit`
-//! feature) `AVAILABLE` is false, HTML mail shows as text and `o` opens it in the browser.
+//! The HTML view: WebKitGTK on Linux, WebView2 on Windows (web_windows.rs). Without either (built
+//! without the `webkit` feature) `available()` is false, HTML mail shows as text and `o` opens it in
+//! the browser.
 
 pub use imp::*;
 
@@ -11,8 +12,6 @@ mod imp {
     use std::cell::RefCell;
     use std::rc::Rc;
     use webkit6::prelude::*;
-
-    pub const AVAILABLE: bool = true;
 
     type LinkFn = Rc<dyn Fn(&str)>;
 
@@ -31,8 +30,24 @@ mod imp {
             *self.on_link.borrow_mut() = Rc::new(f);
         }
 
-        /// Shows `html` in `paper`, making the view on first use.
-        pub fn load(&self, paper: &gtk::Box, html: &str, zoom: f64) {
+        /// Keys reach the window anyway; only the native Windows view needs these.
+        pub fn on_key(&self, _f: impl Fn(&str) + 'static) {}
+
+        pub fn on_focus(&self, _f: impl Fn() + 'static) {}
+
+        pub fn on_failed(&self, _f: impl Fn() + 'static) {}
+
+        pub fn available(&self) -> bool {
+            true
+        }
+
+        pub fn note(&self) -> Option<&'static str> {
+            None
+        }
+
+        /// Shows `html` in `paper`, making the view on first use. Remote loads are up to the CSP
+        /// in `html`.
+        pub fn load(&self, paper: &gtk::Box, html: &str, zoom: f64, _remote: bool) {
             let web = self.view(paper);
             web.set_zoom_level(zoom);
             web.load_html(html, Some("about:blank"));
@@ -118,10 +133,12 @@ mod imp {
     }
 }
 
-#[cfg(not(all(feature = "webkit", unix)))]
-mod imp {
-    pub const AVAILABLE: bool = false;
+#[cfg(windows)]
+#[path = "web_windows.rs"]
+mod imp;
 
+#[cfg(not(any(all(feature = "webkit", unix), windows)))]
+mod imp {
     pub struct Html;
 
     impl Html {
@@ -131,7 +148,21 @@ mod imp {
 
         pub fn on_link(&self, _f: impl Fn(&str) + 'static) {}
 
-        pub fn load(&self, _paper: &gtk::Box, _html: &str, _zoom: f64) {}
+        pub fn on_key(&self, _f: impl Fn(&str) + 'static) {}
+
+        pub fn on_focus(&self, _f: impl Fn() + 'static) {}
+
+        pub fn on_failed(&self, _f: impl Fn() + 'static) {}
+
+        pub fn available(&self) -> bool {
+            false
+        }
+
+        pub fn note(&self) -> Option<&'static str> {
+            None
+        }
+
+        pub fn load(&self, _paper: &gtk::Box, _html: &str, _zoom: f64, _remote: bool) {}
 
         pub fn set_zoom(&self, _zoom: f64) {}
 

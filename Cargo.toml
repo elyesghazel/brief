@@ -31,6 +31,8 @@ webpki-roots = "1.0.11"
 webkit6 = { version = "0.6", optional = true }
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_System_Console", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(windows)'.build-dependencies]
@@ -38,7 +40,8 @@ winresource = "0.1.34"
 
 [features]
 default = ["webkit"]
-# HTML mail in the window via WebKitGTK 6. Without it HTML mail shows as text. Unix only.
+# HTML mail in the window via WebKitGTK 6. Without it HTML mail shows as text. Unix only; Windows
+# always uses WebView2.
 webkit = ["dep:webkit6"]
 
 [profile.release]

@@ -10,6 +10,8 @@ pixbuf=lib/gdk-pixbuf-2.0/2.10.0
 rm -rf "$out"
 mkdir -p "$out/$pixbuf" "$out/share/glib-2.0/schemas" "$out/share/icons"
 cp target/release/brief.exe "$out/"
+# Microsoft's WebView2 loader, which brief loads on the first HTML mail (from webview2-com-sys)
+cp "$(ls -t target/release/build/webview2-com-sys-*/out/x64/WebView2Loader.dll | head -1)" "$out/"
 
 # image loaders (favicons, SVG icons) and the cache that lists them, with relative paths
 cp -r "$prefix/$pixbuf/loaders" "$out/$pixbuf/"
