@@ -12,6 +12,7 @@ mod platform;
 mod smtp;
 mod store;
 mod theme;
+mod thread;
 mod ui;
 
 use gtk::prelude::*;
