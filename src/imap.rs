@@ -147,20 +147,48 @@ fn starttls(mut tcp: TcpStream) -> io::Result<TcpStream> {
     }
 }
 
-/// Connects and logs in.
-pub fn connect(acc: &Account, pass: &str) -> Result<Session, String> {
+/// SASL XOAUTH2 for `AUTHENTICATE`. A non-empty challenge is the server's error report, which
+/// wants an empty answer before the final NO.
+struct XOAuth2(String);
+
+impl imap::Authenticator for XOAuth2 {
+    type Response = String;
+    fn process(&self, challenge: &[u8]) -> String {
+        if challenge.is_empty() { self.0.clone() } else { String::new() }
+    }
+}
+
+/// Connects and logs in with a password, or an access token for OAuth accounts.
+pub fn connect(acc: &Account, secret: &str) -> Result<Session, String> {
+    open(acc, secret).map_err(|(_, e)| e)
+}
+
+/// Like `connect`, with the secret looked up; an OAuth token the server refuses is refreshed once.
+pub fn login(acc: &Account) -> Result<Session, String> {
+    match open(acc, &acc.secret()?) {
+        Ok(s) => Ok(s),
+        Err((true, _)) if acc.is_oauth() => {
+            crate::oauth::invalidate(acc);
+            connect(acc, &acc.secret()?)
+        }
+        Err((_, e)) => Err(e),
+    }
+}
+
+/// The error says whether the server refused the login.
+fn open(acc: &Account, secret: &str) -> Result<Session, (bool, String)> {
     let s = &acc.imap;
-    let tcp = tcp_connect(&s.host, s.port)?;
-    let err = |e: imap::Error| format!("{}: {e}", s.host);
+    let tcp = tcp_connect(&s.host, s.port).map_err(|e| (false, e))?;
+    let err = |e: imap::Error| (false, format!("{}: {e}", s.host));
     let mut client = match s.security {
         Security::Tls => {
-            let mut c = imap::Client::new(Stream::wrap(tcp, &s.host).map_err(|e| e.to_string())?);
+            let mut c = imap::Client::new(Stream::wrap(tcp, &s.host).map_err(|e| (false, e.to_string()))?);
             c.read_greeting().map_err(err)?;
             c
         }
         Security::Starttls => {
-            let tcp = starttls(tcp).map_err(|e| format!("{}: STARTTLS: {e}", s.host))?;
-            let mut c = imap::Client::new(Stream::wrap(tcp, &s.host).map_err(|e| e.to_string())?);
+            let tcp = starttls(tcp).map_err(|e| (false, format!("{}: STARTTLS: {e}", s.host)))?;
+            let mut c = imap::Client::new(Stream::wrap(tcp, &s.host).map_err(|e| (false, e.to_string()))?);
             c.greeting_read = true;
             c
         }
@@ -171,10 +199,15 @@ pub fn connect(acc: &Account, pass: &str) -> Result<Session, String> {
         }
     };
     client.greeting_read = true;
-    client.login(acc.login(), pass).map_err(|(e, _)| match e {
-        imap::Error::No(r) => format!("login refused: {}", r.information),
-        imap::Error::Bad(r) => format!("login refused: {}", r.information),
-        e => format!("login: {e}"),
+    let result = if acc.is_oauth() {
+        client.authenticate("XOAUTH2", &XOAuth2(crate::oauth::xoauth2(acc.login(), secret)))
+    } else {
+        client.login(acc.login(), secret)
+    };
+    result.map_err(|(e, _)| match e {
+        imap::Error::No(r) => (true, format!("login refused: {}", r.information)),
+        imap::Error::Bad(r) => (true, format!("login refused: {}", r.information)),
+        e => (false, format!("login: {e}")),
     })
 }
 
@@ -358,8 +391,7 @@ impl Worker {
     fn session(&mut self) -> Result<&mut Session, String> {
         if self.session.is_none() {
             self.status(true, "connecting");
-            let pass = self.acc.password()?;
-            self.session = Some(connect(&self.acc, &pass)?);
+            self.session = Some(login(&self.acc)?);
         }
         Ok(self.session.as_mut().unwrap())
     }
@@ -648,8 +680,7 @@ fn idle_loop(acc: Account, tx: Sender<Cmd>) {
     std::thread::sleep(Duration::from_secs(5));
     loop {
         let result = (|| -> Result<(), String> {
-            let pass = acc.password()?;
-            let mut s = connect(&acc, &pass)?;
+            let mut s = login(&acc)?;
             let caps = s.capabilities().map_err(|e| e.to_string())?;
             if !caps.has_str("IDLE") {
                 return Err("no IDLE".into());
