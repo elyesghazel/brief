@@ -64,6 +64,7 @@ impl Line {
         self.runs.is_empty()
     }
 
+    #[cfg(test)]
     pub fn text(&self) -> String {
         self.runs.iter().filter_map(|r| if let Run::Text(t, _) = r { Some(t.as_str()) } else { None }).collect()
     }

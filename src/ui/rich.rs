@@ -1301,3 +1301,31 @@ impl App {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png(w: i32, h: i32, alpha: bool) -> Vec<u8> {
+        let pb = gdk_pixbuf::Pixbuf::new(gdk_pixbuf::Colorspace::Rgb, alpha, 8, w, h).unwrap();
+        pb.fill(0x3366_99ff);
+        pb.save_to_bufferv("png", &[]).unwrap()
+    }
+
+    #[test]
+    fn small_images_go_out_as_they_are() {
+        let bytes = png(300, 200, false);
+        let (data, mime, pb) = prepare(&bytes).unwrap();
+        assert_eq!((data, mime.as_str(), pb.width()), (bytes, "image/png", 300));
+    }
+
+    #[test]
+    fn large_images_are_scaled_to_1600() {
+        let (data, mime, pb) = prepare(&png(4000, 1000, false)).unwrap();
+        assert_eq!((mime.as_str(), pb.width(), pb.height()), ("image/jpeg", 1600, 400));
+        assert!(data.starts_with(&[0xff, 0xd8]));
+        // transparency stays PNG
+        let (_, mime, pb) = prepare(&png(1000, 3200, true)).unwrap();
+        assert_eq!((mime.as_str(), pb.height()), ("image/png", 1600));
+        assert!(prepare(b"not an image").is_err());
+    }
+}
