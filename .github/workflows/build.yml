@@ -15,6 +15,11 @@ on:
 permissions:
   contents: read
 
+# brief's own Google OAuth client, built into the binaries (empty on forks and fork PRs)
+env:
+  BRIEF_GOOGLE_CLIENT_ID: ${{ secrets.BRIEF_GOOGLE_CLIENT_ID }}
+  BRIEF_GOOGLE_CLIENT_SECRET: ${{ secrets.BRIEF_GOOGLE_CLIENT_SECRET }}
+
 jobs:
   linux:
     runs-on: ubuntu-24.04
