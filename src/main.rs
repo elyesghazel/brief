@@ -21,6 +21,7 @@ const HELP: &str = "brief - keyboard-first mail
 usage:
   brief            open the window (a second call focuses the running one)
   brief sync       sync every account once without a window and print what changed
+  brief login ACC  browser sign-in for an account with auth = \"oauth2\"
   brief themes     list themes
   brief --version
 
@@ -50,6 +51,7 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::SUCCESS;
         }
         Some("sync") => return headless_sync(),
+        Some("login") if args.len() == 2 => return login(&args[1]),
         Some("cat") if args.len() == 2 => {
             // debug: print a .eml the way the reader shows it
             let raw = std::fs::read(&args[1]).unwrap_or_default();
@@ -133,4 +135,45 @@ fn headless_sync() -> glib::ExitCode {
     }
     println!("took {:.1}s", started.elapsed().as_secs_f64());
     if ok { glib::ExitCode::SUCCESS } else { glib::ExitCode::FAILURE }
+}
+
+/// Browser sign-in for an account from the config; stores the refresh token.
+fn login(name: &str) -> glib::ExitCode {
+    let fail = |e: String| {
+        eprintln!("brief: {e}");
+        glib::ExitCode::FAILURE
+    };
+    let cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => return fail(e),
+    };
+    let Some(acc) = cfg.accounts.iter().find(|a| a.name == name || a.email == name) else {
+        return fail(format!("no account called {name}"));
+    };
+    if !acc.is_oauth() {
+        return fail(format!("{name} logs in with a password; set auth = \"oauth2\" first"));
+    }
+    let open = |url: &str| {
+        println!("Opening the browser. If nothing happens, open this link:\n\n{url}\n");
+        platform::open(url);
+    };
+    let tokens = match oauth::sign_in(acc, open, &std::sync::atomic::AtomicBool::new(false)) {
+        Ok(t) => t,
+        Err(e) => return fail(e),
+    };
+    if let Err(e) = config::store_refresh_token(&acc.email, tokens.refresh.as_deref().unwrap_or_default()) {
+        return fail(e);
+    }
+    print!("signed in as {}, ", acc.email);
+    let checks = imap::connect(acc, &tokens.access).map(|mut s| drop(s.logout())).and_then(|()| smtp::test(acc, &tokens.access));
+    match checks {
+        Ok(()) => {
+            println!("IMAP and SMTP work");
+            glib::ExitCode::SUCCESS
+        }
+        Err(e) => {
+            println!("but the servers refused: {e}");
+            glib::ExitCode::FAILURE
+        }
+    }
 }
