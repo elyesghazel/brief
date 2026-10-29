@@ -233,6 +233,9 @@ impl Account {
         if !self.password_cmd.is_empty() {
             out += &format!("password_cmd = {}\n", q(&self.password_cmd));
         }
+        if !self.color.is_empty() {
+            out += &format!("color = {}\n", q(&self.color));
+        }
         if self.is_oauth() {
             out += "auth = \"oauth2\"\n";
             let o = &self.oauth;
