@@ -100,7 +100,7 @@ pub struct Account {
     pub color: String,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Server {
     pub host: String,
     pub port: u16,

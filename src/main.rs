@@ -3,6 +3,7 @@
 // no console window behind the app on Windows; the CLI attaches to the parent's instead
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod autoconfig;
 mod avatar;
 mod config;
 mod imap;
