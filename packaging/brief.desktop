@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=brief
+GenericName=Mail
+Comment=Keyboard-first mail client
+Exec=brief
+Icon=mail-unread
+Terminal=false
+Categories=Network;Email;GTK;
+Keywords=mail;email;imap;inbox;
+StartupWMClass=ch.elyesghazel.brief
