@@ -20,7 +20,6 @@ use gtk::{gio, glib};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
-use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -58,7 +57,7 @@ pub struct App {
     pub win: gtk::ApplicationWindow,
     pub cfg: RefCell<Config>,
     pub accounts: RefCell<Vec<Account>>,
-    pub workers: RefCell<Vec<Sender<Cmd>>>,
+    pub workers: RefCell<Vec<imap::Handle>>,
     pub store: RefCell<Store>,
     events: imap::EventTx,
     theme_css: gtk::CssProvider,
@@ -698,7 +697,7 @@ impl App {
 
     pub fn send(&self, acct: usize, cmd: Cmd) {
         if let Some(w) = self.workers.borrow().get(acct) {
-            let _ = w.send(cmd);
+            w.send(cmd);
         }
     }
 

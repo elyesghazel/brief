@@ -13,7 +13,7 @@ use std::collections::{HashSet, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -301,8 +301,26 @@ fn flags_of(flags: &[Flag<'_>]) -> (bool, bool, bool) {
 
 const HEADER_QUERY: &str = "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID REFERENCES IN-REPLY-TO CONTENT-TYPE)])";
 
+/// The UI's end of a worker.
+pub struct Handle {
+    tx: Sender<Cmd>,
+    idx: Arc<AtomicUsize>,
+}
+
+impl Handle {
+    pub fn send(&self, cmd: Cmd) {
+        let _ = self.tx.send(cmd);
+    }
+
+    /// The account moved up in the list (one before it was removed).
+    pub fn set_idx(&self, idx: usize) {
+        self.idx.store(idx, Ordering::Relaxed);
+    }
+}
+
 pub struct Worker {
-    pub idx: usize,
+    /// Position of the account, which events carry.
+    idx: Arc<AtomicUsize>,
     acc: Account,
     session: Option<Session>,
     store: Store,
@@ -320,8 +338,10 @@ pub struct Worker {
 }
 
 /// Starts the worker and the IDLE watcher for one account.
-pub fn spawn(idx: usize, acc: Account, events: EventTx, cache_limit: u32, sync_minutes: u64) -> Sender<Cmd> {
+pub fn spawn(idx: usize, acc: Account, events: EventTx, cache_limit: u32, sync_minutes: u64) -> Handle {
     let (tx, rx) = mpsc::channel();
+    let idx = Arc::new(AtomicUsize::new(idx));
+    let worker_idx = idx.clone();
     let idle_tx = tx.clone();
     let idle_acc = acc.clone();
     let stop = Arc::new(AtomicBool::new(false));
@@ -331,7 +351,7 @@ pub fn spawn(idx: usize, acc: Account, events: EventTx, cache_limit: u32, sync_m
         .spawn(move || {
             let store = Store::open().expect("cache");
             let mut w = Worker {
-                idx,
+                idx: worker_idx,
                 acc,
                 session: None,
                 store,
@@ -349,12 +369,16 @@ pub fn spawn(idx: usize, acc: Account, events: EventTx, cache_limit: u32, sync_m
         .unwrap();
     std::thread::Builder::new().name("idle".into()).spawn(move || idle_loop(idle_acc, idle_tx, idle_stop)).unwrap();
     tx.send(Cmd::SyncAll { manual: false }).ok();
-    tx
+    Handle { tx, idx }
 }
 
 impl Worker {
+    fn idx(&self) -> usize {
+        self.idx.load(Ordering::Relaxed)
+    }
+
     fn status(&self, busy: bool, text: impl Into<String>) {
-        let _ = self.events.send_blocking(Event::Status { acct: self.idx, busy, text: text.into() });
+        let _ = self.events.send_blocking(Event::Status { acct: self.idx(), busy, text: text.into() });
     }
 
     fn emit(&self, e: Event) {
@@ -389,7 +413,7 @@ impl Worker {
             if let Err(e) = result {
                 self.session = None;
                 self.failures += 1;
-                self.emit(Event::Error { acct: self.idx, text: e.clone() });
+                self.emit(Event::Error { acct: self.idx(), text: e.clone() });
                 self.status(false, format!("offline: {e}"));
                 eprintln!("brief [{}] {label}: {e}", self.acc.name);
                 // back off, but a manual refresh retries right away
@@ -631,7 +655,7 @@ impl Worker {
             self.store.clear_folder(&acct, folder);
             self.store.set_counts(&acct, folder, 0, 0);
             self.seen_once.insert(folder.to_owned());
-            self.emit(Event::Folder { acct: self.idx, folder: folder.into() });
+            self.emit(Event::Folder { acct: self.idx(), folder: folder.into() });
             return Ok(());
         }
         let start = mb.exists.saturating_sub(limit) + 1;
@@ -658,7 +682,7 @@ impl Worker {
         for chunk in new.chunks(250) {
             fresh.extend(self.fetch_headers(folder, chunk)?);
             // show the newest batch at once on a first sync
-            self.emit(Event::Folder { acct: self.idx, folder: folder.into() });
+            self.emit(Event::Folder { acct: self.idx(), folder: folder.into() });
         }
         let unseen = server.values().filter(|f| !f.0).count() as u32;
         self.store.set_counts(&acct, folder, unseen, mb.exists);
@@ -669,10 +693,10 @@ impl Worker {
             let unread: Vec<&Header> = fresh.iter().filter(|h| !h.seen).collect();
             if let Some(h) = unread.first() {
                 let from = if h.from_name.is_empty() { h.from_addr.clone() } else { h.from_name.clone() };
-                self.emit(Event::NewMail { acct: self.idx, from, subject: h.subject.clone(), count: unread.len() });
+                self.emit(Event::NewMail { acct: self.idx(), from, subject: h.subject.clone(), count: unread.len() });
             }
         }
-        self.emit(Event::Folder { acct: self.idx, folder: folder.into() });
+        self.emit(Event::Folder { acct: self.idx(), folder: folder.into() });
         Ok(())
     }
 
@@ -686,7 +710,7 @@ impl Worker {
             let (preview, attach) = message::digest(raw);
             self.store.set_body(&acct, folder, uid, raw, &preview, attach);
             if uids.len() == 1 {
-                self.emit(Event::Body { acct: self.idx, folder: folder.into(), uid });
+                self.emit(Event::Body { acct: self.idx(), folder: folder.into(), uid });
             }
         }
         Ok(())
@@ -698,7 +722,7 @@ impl Worker {
         for chunk in missing.chunks(15) {
             self.pump()?;
             self.fetch_bodies(folder, chunk)?;
-            self.emit(Event::Folder { acct: self.idx, folder: folder.into() });
+            self.emit(Event::Folder { acct: self.idx(), folder: folder.into() });
         }
         Ok(())
     }
