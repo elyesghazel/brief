@@ -3,7 +3,7 @@
 use crate::config::{Account, Security};
 use lettre::message::header::ContentType;
 use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
-use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use lettre::{Message, SmtpTransport, Transport};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -100,41 +100,43 @@ fn mime_of(name: &str) -> &'static str {
     }
 }
 
-/// Sends and returns the formatted message, for saving into Sent.
-pub fn send(acc: &Account, d: &Draft) -> Result<Vec<u8>, String> {
-    let msg = build(acc, d)?;
-    let pass = acc.password()?;
+fn transport(acc: &Account, secret: &str, timeout: u64) -> Result<SmtpTransport, String> {
     let s = &acc.smtp;
     let builder = match s.security {
         Security::Tls => SmtpTransport::relay(&s.host),
         Security::Starttls => SmtpTransport::starttls_relay(&s.host),
         Security::None => Ok(SmtpTransport::builder_dangerous(&s.host)),
     }
-    .map_err(|e| e.to_string())?;
-    let transport = builder
-        .port(s.port)
-        .credentials(Credentials::new(acc.login().to_owned(), pass))
-        .timeout(Some(Duration::from_secs(30)))
-        .build();
-    transport.send(&msg).map_err(|e| format!("{}: {e}", s.host))?;
+    .map_err(|e| e.to_string())?
+    .port(s.port)
+    .credentials(Credentials::new(acc.login().to_owned(), secret.to_owned()))
+    .timeout(Some(Duration::from_secs(timeout)));
+    let builder = if acc.is_oauth() { builder.authentication(vec![Mechanism::Xoauth2]) } else { builder };
+    Ok(builder.build())
+}
+
+/// An XOAUTH2 login the server refused: an error challenge or 534/535.
+fn auth_refused(e: &lettre::transport::smtp::Error) -> bool {
+    e.is_client() || e.status().is_some_and(|c| matches!(u16::from(c), 530 | 534 | 535))
+}
+
+/// Sends and returns the formatted message, for saving into Sent.
+pub fn send(acc: &Account, d: &Draft) -> Result<Vec<u8>, String> {
+    let msg = build(acc, d)?;
+    let host = &acc.smtp.host;
+    let mut result = transport(acc, &acc.secret()?, 30)?.send(&msg);
+    if acc.is_oauth() && result.as_ref().is_err_and(auth_refused) {
+        crate::oauth::invalidate(acc);
+        result = transport(acc, &acc.secret()?, 30)?.send(&msg);
+    }
+    result.map_err(|e| format!("{host}: {e}"))?;
     Ok(msg.formatted())
 }
 
 /// Logs in to SMTP without sending, for the account form.
-pub fn test(acc: &Account, pass: &str) -> Result<(), String> {
+pub fn test(acc: &Account, secret: &str) -> Result<(), String> {
     let s = &acc.smtp;
-    let builder = match s.security {
-        Security::Tls => SmtpTransport::relay(&s.host),
-        Security::Starttls => SmtpTransport::starttls_relay(&s.host),
-        Security::None => Ok(SmtpTransport::builder_dangerous(&s.host)),
-    }
-    .map_err(|e| e.to_string())?;
-    let t = builder
-        .port(s.port)
-        .credentials(Credentials::new(acc.login().to_owned(), pass.to_owned()))
-        .timeout(Some(Duration::from_secs(15)))
-        .build();
-    match t.test_connection() {
+    match transport(acc, secret, 15)?.test_connection() {
         Ok(true) => Ok(()),
         Ok(false) => Err(format!("SMTP {}: no connection", s.host)),
         Err(e) => Err(format!("SMTP {}: {e}", s.host)),
