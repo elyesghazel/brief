@@ -62,7 +62,7 @@ pub fn icon_button(icon: &str, text: &str, tip: &str) -> gtk::Button {
 pub struct Icons {
     textures: RefCell<HashMap<String, Option<gdk::Texture>>>,
     asked: RefCell<HashSet<String>>,
-    fetch: Option<Sender<String>>,
+    fetch: RefCell<Option<Sender<String>>>,
 }
 
 fn decode(bytes: &[u8]) -> Option<gdk::Texture> {
@@ -81,7 +81,14 @@ fn decode(bytes: &[u8]) -> Option<gdk::Texture> {
 
 impl Icons {
     pub fn new(fetch: Option<Sender<String>>) -> Icons {
-        Icons { textures: RefCell::new(HashMap::new()), asked: RefCell::new(HashSet::new()), fetch }
+        Icons { textures: RefCell::new(HashMap::new()), asked: RefCell::new(HashSet::new()), fetch: RefCell::new(fetch) }
+    }
+
+    /// A new fetcher (another `favicons` mode), or none; domains are asked again.
+    pub fn set_fetch(&self, fetch: Option<Sender<String>>) {
+        self.asked.borrow_mut().clear();
+        self.textures.borrow_mut().retain(|_, t| t.is_some());
+        *self.fetch.borrow_mut() = fetch;
     }
 
     /// The sender's icon if there is one now; asks the fetcher once otherwise.
@@ -94,7 +101,7 @@ impl Icons {
             avatar::Cached::Icon(bytes) => decode(&bytes),
             avatar::Cached::None => None,
             avatar::Cached::Unknown => {
-                if let Some(f) = &self.fetch
+                if let Some(f) = &*self.fetch.borrow()
                     && self.asked.borrow_mut().insert(domain.clone()) {
                         let _ = f.send(domain);
                     }
