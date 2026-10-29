@@ -1,0 +1,106 @@
+name: build
+
+on:
+  push:
+    branches: [main, "feat/**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - run: cargo test --release --locked
+
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      CARGO_HOME: ${{ github.workspace }}\..\cargo-home
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            zip
+          pacboy: >-
+            gtk4:p
+            librsvg:p
+            adwaita-icon-theme:p
+            pkgconf:p
+            gcc:p
+            rust:p
+            ntldd:p
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}\..\cargo-home\registry
+            target
+          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: windows-cargo-
+      - run: cargo build --release --locked
+      - run: cargo test --release --locked
+      - run: packaging/windows/bundle.sh dist/brief
+      - run: cd dist && zip -qr9 brief-windows-x86_64.zip brief
+      # outside MSYS2, with a bare PATH, so a DLL missing from the folder fails here
+      - name: smoke test
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Windows\system32;C:\Windows"
+          $exe = (Resolve-Path dist\brief\brief.exe).Path
+          & $exe --version | Out-Host
+          $t = Measure-Command { $themes = & $exe themes | Out-String }
+          if ($LASTEXITCODE -ne 0 -or -not $themes.Trim()) { throw "brief themes failed" }
+          Write-Host $themes
+          Write-Host ("cli start: {0:N0} ms" -f $t.TotalMilliseconds)
+          # time to the first window: once cold (first run writes the config), once warm
+          foreach ($run in "cold", "warm") {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process $exe -PassThru -RedirectStandardError "gui-$run.txt"
+            while ($p.MainWindowHandle -eq 0 -and -not $p.HasExited -and $sw.ElapsedMilliseconds -lt 30000) {
+              Start-Sleep -Milliseconds 10
+              $p.Refresh()
+            }
+            $ms = $sw.ElapsedMilliseconds
+            $alive = -not $p.HasExited
+            Start-Sleep -Seconds 3
+            if ($run -eq "warm") {
+              Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+              $r = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bmp = [Drawing.Bitmap]::new($r.Width, $r.Height)
+              [Drawing.Graphics]::FromImage($bmp).CopyFromScreen($r.Location, [Drawing.Point]::Empty, $r.Size)
+              $bmp.Save("$PWD\dist\screenshot.png")
+            }
+            if (-not $p.HasExited) { Stop-Process $p -Force }
+            Get-Content "gui-$run.txt" | Out-Host
+            if (-not $alive -or $ms -ge 30000) { throw "the window did not come up" }
+            Write-Host "window up after $ms ms ($run)"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: brief-windows-x86_64
+          path: dist/brief
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot
+          path: dist/screenshot.png
+          if-no-files-found: ignore
+      - name: release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME dist/brief-windows-x86_64.zip --generate-notes --repo $env:GITHUB_REPOSITORY
