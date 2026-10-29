@@ -1,7 +1,8 @@
 //! The reading pane: header with avatar and actions, the remote content banner, attachment chips,
 //! and the body - HTML in a WebKit view (scripts off, remote loads blocked by a CSP until allowed)
-//! or text in a TextView.
+//! or text in a TextView. Without WebKit (Windows) HTML mail shows as text.
 
+use super::web::{self, Html};
 use super::widgets::{Avatar, emoji, icon_button};
 use super::{App, Key, find_links, human_size, key, label, long_date, open_uri};
 use crate::avatar;
@@ -9,11 +10,10 @@ use crate::imap::Cmd;
 use crate::message::{self, Parsed};
 use crate::store::Row;
 use gtk::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::glib;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
-use webkit6::prelude::*;
 
 pub struct Reader {
     pub root: gtk::Stack,
@@ -34,7 +34,7 @@ pub struct Reader {
     pub body: gtk::TextView,
     pub scroll: gtk::ScrolledWindow,
     paper: gtk::Box,
-    web: RefCell<Option<webkit6::WebView>>,
+    web: Html,
     /// Remote content allowed for the message on screen.
     pub remote_ok: RefCell<Option<Key>>,
     zoom: Cell<f64>,
@@ -196,7 +196,7 @@ impl Reader {
             body,
             scroll,
             paper,
-            web: RefCell::new(None),
+            web: Html::new(),
             remote_ok: RefCell::new(None),
             zoom: Cell::new(1.0),
             buttons,
@@ -246,72 +246,6 @@ impl Reader {
             }
         });
         self.body.add_controller(click);
-    }
-
-    /// The WebKit view, made on first use: ephemeral session, no page scripts, links open
-    /// outside.
-    fn web(&self) -> webkit6::WebView {
-        if let Some(w) = self.web.borrow().as_ref() {
-            return w.clone();
-        }
-        let session = webkit6::NetworkSession::new_ephemeral();
-        let web = webkit6::WebView::builder().network_session(&session).build();
-        if let Some(s) = WebViewExt::settings(&web) {
-            s.set_enable_javascript_markup(false);
-            s.set_enable_developer_extras(false);
-            s.set_enable_page_cache(false);
-            s.set_enable_html5_local_storage(false);
-            s.set_enable_html5_database(false);
-            s.set_enable_webgl(false);
-            s.set_enable_webaudio(false);
-            s.set_enable_media(false);
-            s.set_media_playback_requires_user_gesture(true);
-            s.set_allow_modal_dialogs(false);
-            s.set_javascript_can_open_windows_automatically(false);
-            s.set_default_font_family("sans-serif");
-        }
-        web.set_background_color(&gdk::RGBA::new(1.0, 1.0, 1.0, 1.0));
-        web.set_vexpand(true);
-        web.connect_decide_policy(|_, decision, kind| {
-            match kind {
-                webkit6::PolicyDecisionType::NavigationAction | webkit6::PolicyDecisionType::NewWindowAction => {
-                    let Some(nav) = decision.downcast_ref::<webkit6::NavigationPolicyDecision>() else { return false };
-                    let Some(action) = nav.navigation_action() else { return false };
-                    let uri = action.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
-                    if uri.starts_with("about:") || uri.starts_with("data:") {
-                        return false;
-                    }
-                    // every real navigation goes to the browser; the view never leaves the mail
-                    if action.navigation_type() == webkit6::NavigationType::LinkClicked || kind == webkit6::PolicyDecisionType::NewWindowAction {
-                        open_uri(&uri);
-                    }
-                    decision.ignore();
-                    true
-                }
-                _ => false,
-            }
-        });
-        // no "reload", "inspect" and friends in the right-click menu
-        web.connect_context_menu(|_, menu, _| {
-            let keep = [webkit6::ContextMenuAction::CopyLinkToClipboard, webkit6::ContextMenuAction::Copy, webkit6::ContextMenuAction::OpenLink];
-            for item in menu.items() {
-                if !keep.contains(&item.stock_action()) {
-                    menu.remove(&item);
-                }
-            }
-            false
-        });
-        // a wide mail must never force the window wider (it would clip in a tiled layout)
-        let holder = gtk::ScrolledWindow::builder()
-            .child(&web)
-            .hscrollbar_policy(gtk::PolicyType::External)
-            .vscrollbar_policy(gtk::PolicyType::External)
-            .vexpand(true)
-            .hexpand(true)
-            .build();
-        self.paper.append(&holder);
-        *self.web.borrow_mut() = Some(web.clone());
-        web
     }
 
     fn set_star(&self, on: bool) {
@@ -392,15 +326,17 @@ impl App {
                     rd.chips.append(&b);
                 }
                 rd.chips_scroll.set_visible(!p.attachments.is_empty());
-                let use_html = p.html.is_some() && self.cfg.borrow().html && !self.html_as_text.get();
+                let use_html = web::AVAILABLE && p.html.is_some() && self.cfg.borrow().html && !self.html_as_text.get();
                 if use_html {
                     self.show_html(&row, p);
                 } else {
                     let text = p.text.clone();
-                    let note = match (p.html.is_some(), p.from_html) {
-                        (true, true) => "HTML mail as text · H shows the HTML",
-                        (true, false) => "Text version · H shows the HTML",
-                        _ => "",
+                    let note = match (p.html.is_some(), p.from_html, web::AVAILABLE) {
+                        (false, ..) => "",
+                        (true, true, true) => "HTML mail as text · H shows the HTML",
+                        (true, false, true) => "Text version · H shows the HTML",
+                        (true, true, false) => "HTML mail as text · o opens it in the browser",
+                        (true, false, false) => "Text version · o opens the HTML in the browser",
                     };
                     rd.note.set_text(note);
                     rd.note.set_visible(!note.is_empty());
@@ -465,9 +401,7 @@ impl App {
             rd.banner.set_visible(true);
         }
         rd.note.set_visible(false);
-        let web = rd.web();
-        web.set_zoom_level(rd.zoom.get());
-        web.load_html(&message::prepare_html(html, &p.inline, allowed), Some("about:blank"));
+        rd.web.load(&rd.paper, &message::prepare_html(html, &p.inline, allowed), rd.zoom.get());
         rd.content.set_visible_child_name("html");
         // links for L come from the text version
         *self.links.borrow_mut() = find_links(&p.text).into_iter().map(|(s, e)| p.text[s..e].to_owned()).collect();
@@ -535,14 +469,14 @@ impl App {
         }
     }
 
-    fn html_visible(&self) -> Option<webkit6::WebView> {
-        (self.rd.content.visible_child_name().as_deref() == Some("html")).then(|| self.rd.web.borrow().clone()).flatten()
+    fn html_visible(&self) -> bool {
+        self.rd.content.visible_child_name().as_deref() == Some("html")
     }
 
     pub fn reader_scroll(&self, pages: f64) {
-        if let Some(web) = self.html_visible() {
+        if self.html_visible() {
             let js = if pages.abs() < 0.2 { format!("window.scrollBy(0,{})", 70.0 * pages.signum()) } else { format!("window.scrollBy(0,window.innerHeight*{})", pages * 0.9) };
-            web.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+            self.rd.web.run_js(&js);
             return;
         }
         let adj = self.rd.scroll.vadjustment();
@@ -551,9 +485,9 @@ impl App {
     }
 
     pub fn reader_top(&self, bottom: bool) {
-        if let Some(web) = self.html_visible() {
+        if self.html_visible() {
             let js = if bottom { "window.scrollTo(0,document.body.scrollHeight)" } else { "window.scrollTo(0,0)" };
-            web.evaluate_javascript(js, None, None, None::<&gio::Cancellable>, |_| {});
+            self.rd.web.run_js(js);
             return;
         }
         let adj = self.rd.scroll.vadjustment();
@@ -563,9 +497,7 @@ impl App {
     pub fn zoom(&self, delta: f64) {
         let z = if delta == 0.0 { 1.0 } else { (self.rd.zoom.get() + delta).clamp(0.5, 2.5) };
         self.rd.zoom.set(z);
-        if let Some(w) = self.rd.web.borrow().as_ref() {
-            w.set_zoom_level(z);
-        }
+        self.rd.web.set_zoom(z);
         self.toast(&format!("zoom {:.0}%", z * 100.0), false);
     }
 

@@ -21,8 +21,15 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
 ureq = { version = "3.5.0", default-features = false, features = ["rustls"] }
-webkit6 = "0.6"
 webpki-roots = "1.0.11"
+
+[target.'cfg(unix)'.dependencies]
+webkit6 = { version = "0.6", optional = true }
+
+[features]
+default = ["webkit"]
+# HTML mail in the window via WebKitGTK 6. Without it HTML mail shows as text. Unix only.
+webkit = ["dep:webkit6"]
 
 [profile.release]
 lto = true

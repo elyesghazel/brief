@@ -6,6 +6,7 @@ mod form;
 mod keys;
 mod palette;
 mod reader;
+mod web;
 mod widgets;
 
 use crate::config::{self, Account, Config};
