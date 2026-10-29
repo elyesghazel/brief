@@ -275,8 +275,46 @@ impl App {
         true
     }
 
-    pub fn open_palette_main(self: &Rc<Self>) {
+    /// Composer commands, first in the palette while writing.
+    fn compose_items(self: &Rc<Self>) -> Vec<Item> {
+        let rich_on = self.compose.rich.on.get();
         let mut items = vec![
+            item("Send", "Ctrl+Enter", |a| a.send_draft()),
+            item("Save draft", "Ctrl+S", |a| a.save_draft()),
+            item("Attach file…", "Ctrl+O", |a| a.pick_files()),
+            item("Edit in $EDITOR", "Ctrl+E", |a| a.external_editor()),
+            item(if rich_on { "Switch to plain text" } else { "Switch to rich text" }, "Ctrl+Shift+M", |a| a.rich_cmd("mode")),
+            item(if self.compose.rich.bar.is_visible() { "Hide formatting bar" } else { "Show formatting bar" }, "Ctrl+Shift+F", |a| a.rich_cmd("bar")),
+        ];
+        if rich_on {
+            let fmt: [(&str, &str, &'static str); 15] = [
+                ("Bold", "Ctrl+B", "b"),
+                ("Italic", "Ctrl+I", "i"),
+                ("Underline", "Ctrl+U", "u"),
+                ("Strikethrough", "Ctrl+Shift+X", "s"),
+                ("Link…", "Ctrl+L", "link"),
+                ("Bulleted list", "Ctrl+Shift+8", "ul"),
+                ("Numbered list", "Ctrl+Shift+7", "ol"),
+                ("Quote", "Ctrl+Shift+9", "quote"),
+                ("Heading", "Ctrl+Alt+1", "h1"),
+                ("Subheading", "Ctrl+Alt+2", "h2"),
+                ("Normal text", "Ctrl+Alt+0", "para"),
+                ("Clear formatting", "Ctrl+\\", "clear"),
+                ("Insert image…", "Ctrl+Shift+P", "image"),
+                ("Emoji…", "Ctrl+.", "emoji"),
+                ("Open link at cursor", "Ctrl+click", "open"),
+            ];
+            for (title, key, cmd) in fmt {
+                items.push(item(title, key, move |a| a.rich_cmd(cmd)));
+            }
+        }
+        items
+    }
+
+    pub fn open_palette_main(self: &Rc<Self>) {
+        let composing = self.stack.visible_child_name().as_deref() == Some("compose");
+        let mut items = if composing { self.compose_items() } else { Vec::new() };
+        items.extend(vec![
             item("Compose", "c", |a| a.compose_new()),
             item("Reply", "r", |a| a.compose_reply(false)),
             item("Reply all", "R", |a| a.compose_reply(true)),
@@ -313,8 +351,9 @@ impl App {
             item("Open config file", "", |_| open_uri(&config::path().to_string_lossy())),
             item("All inboxes", "0", |a| a.open_view(View::Unified)),
             item("Keyboard shortcuts", "?", |a| a.show_help()),
+            item("Edit draft / edit as new", "E", |a| a.compose_edit()),
             item("Quit", "q", |a| a.win.close()),
-        ];
+        ]);
         items.extend(self.folder_items(|a, acct, folder| a.open_view(View::Folder { acct, folder }), "Go to "));
         self.open_palette("commands", items, "", None);
     }
@@ -490,6 +529,7 @@ pub fn help_dialog() -> gtk::Box {
             ("#Messages", ""),
             ("c", "compose"),
             ("r / R / f", "reply / reply all / forward"),
+            ("E", "edit draft, or edit as new"),
             ("e", "archive"),
             ("d", "delete"),
             ("!", "spam"),
@@ -516,6 +556,21 @@ pub fn help_dialog() -> gtk::Box {
             ("Ctrl+S", "save draft"),
             ("Tab", "accept address suggestion"),
             ("Esc", "close (twice to discard)"),
+        ],
+        &[
+            ("#Formatting", ""),
+            ("Ctrl+B / I / U", "bold / italic / underline"),
+            ("Ctrl+Shift+X", "strikethrough"),
+            ("Ctrl+L", "link (Ctrl+click opens)"),
+            ("Ctrl+Shift+8 / 7", "bulleted / numbered list"),
+            ("Ctrl+Shift+9", "quote"),
+            ("Ctrl+Alt+1 / 2 / 0", "heading / subheading / text"),
+            ("Ctrl+\\", "clear formatting"),
+            ("Ctrl+Shift+P", "image (or paste, drop)"),
+            ("Ctrl+. / Ctrl+;", "emoji"),
+            ("- * 1. > # + Space", "start a list, quote, heading"),
+            ("Ctrl+Shift+M", "rich / plain text"),
+            ("Ctrl+Shift+F", "formatting bar"),
         ],
     ];
     for g in groups {
