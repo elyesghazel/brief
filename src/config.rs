@@ -44,6 +44,8 @@ pub struct Config {
     pub compose: String,
     /// The formatting toolbar above the message; Ctrl+Shift+F toggles it.
     pub toolbar: bool,
+    /// How long an open message waits before it counts as read, in milliseconds; -1 = never.
+    pub mark_read_ms: i64,
     #[serde(rename = "account")]
     pub accounts: Vec<Account>,
     /// OAuth app per provider (`[oauth.google]`, `[oauth.microsoft]`), shared by its accounts.
@@ -66,6 +68,7 @@ impl Default for Config {
             editor: String::new(),
             compose: "rich".into(),
             toolbar: true,
+            mark_read_ms: 700,
             accounts: Vec::new(),
             oauth: HashMap::new(),
         }
@@ -277,6 +280,7 @@ theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # editor = "kitty -e nvim" # Ctrl+E in the composer
 # compose = "rich"        # "plain" starts the composer without formatting; Ctrl+Shift+M switches
 # toolbar = true           # formatting bar in the composer; Ctrl+Shift+F hides it
+# mark_read_ms = 700       # an open message counts as read after this long; -1 = never
 
 # Add accounts with `A` in the app, or by hand:
 #
@@ -349,6 +353,11 @@ impl Config {
 /// Sets a top-level key in config.toml, e.g. `set("theme", "eg")`.
 pub fn set(key: &str, value: impl Into<toml::Value>) -> Result<(), String> {
     write_edit(Scope::Top, &[key], Some(value.into()))
+}
+
+/// Removes a top-level key, so the default applies again.
+pub fn unset(key: &str) -> Result<(), String> {
+    write_edit(Scope::Top, &[key], None)
 }
 
 /// Sets (`Some`) or removes a field of the account named `name`; `path` is `["color"]` or

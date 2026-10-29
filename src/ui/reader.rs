@@ -516,12 +516,13 @@ impl App {
         let unseen = !row.seen || self.conv.borrow().iter().any(|r| !r.seen);
         *self.current.borrow_mut() = Some((row.clone(), parsed));
         self.render_conv();
-        if unseen {
+        let delay = self.cfg.borrow().mark_read_ms;
+        if unseen && delay >= 0 {
             // read after a short look, so skimming with j/k does not mark everything; a
             // conversation goes read as a whole
             let me = Rc::downgrade(self);
             let k = key(&row);
-            glib::timeout_add_local_once(Duration::from_millis(700), move || {
+            glib::timeout_add_local_once(Duration::from_millis(delay as u64), move || {
                 let Some(app) = me.upgrade() else { return };
                 let still = app.current.borrow().as_ref().is_some_and(|(r, _)| key(r) == k);
                 if still {
