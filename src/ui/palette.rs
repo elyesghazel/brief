@@ -232,6 +232,11 @@ impl App {
                 a.html_as_text.set(!a.html_as_text.get());
                 a.rerender();
             }),
+            item(
+                if self.threads() { "Conversations off (one row per message)" } else { "Conversations on (group replies)" },
+                "",
+                |a| a.toggle_threads(),
+            ),
             item("Theme…", "t", |a| a.open_palette_themes()),
             item("Add account…", "A", |a| a.open_form()),
             item("Open config file", "", |_| open_uri(&config::path().to_string_lossy())),
