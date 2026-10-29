@@ -236,7 +236,7 @@ fn build(app: &gtk::Application) -> Rc<App> {
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("brief: {e}");
+            crate::log::error(&e);
             let mut c = Config::default();
             c.accounts.clear();
             notify("brief: config error", &e);

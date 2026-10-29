@@ -1363,7 +1363,7 @@ impl App {
         f.check_error.set_text(&what);
         f.check_error.set_tooltip_text(Some(err));
         f.check_hint.set_text(&next);
-        eprintln!("brief: setup: {err}");
+        crate::log::warn(&format!("setup {}: {err}", f.email.text().trim()));
         self.update_hints();
     }
 

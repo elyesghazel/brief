@@ -508,6 +508,7 @@ impl App {
                     }
                 }
                 Ok(Err(e)) => {
+                    crate::log::error(&format!("[{}] not sent: {e}", acc.name));
                     let title = format!("not sent: {e}");
                     app.open_compose(acct_idx, d, &title);
                     *app.compose.reply_of.borrow_mut() = reply_of;

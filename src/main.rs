@@ -7,6 +7,7 @@ mod autoconfig;
 mod avatar;
 mod config;
 mod imap;
+mod log;
 mod mailto;
 mod message;
 mod oauth;

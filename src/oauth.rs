@@ -479,7 +479,7 @@ pub fn access_token(acc: &Account) -> Result<String, String> {
         }
     check(&acc.oauth)?;
     let again = |why: &str| {
-        eprintln!("brief [{}] sign-in gone: {why}", acc.name);
+        crate::log::warn(&format!("[{}] sign-in gone: {why}", acc.name));
         signed_out().lock().unwrap().insert(acc.email.clone());
         format!("signed out, sign in again (Ctrl+K, or `brief login {}`)", acc.name)
     };
@@ -498,7 +498,7 @@ pub fn access_token(acc: &Account) -> Result<String, String> {
         // Microsoft rotates refresh tokens
         Some(new) if *new != stored => {
             if let Err(e) = config::store_refresh_token(&acc.email, new) {
-                eprintln!("brief [{}] {e}", acc.name);
+                crate::log::error(&format!("[{}] {e}", acc.name));
             }
         }
         _ => tokens.refresh = Some(stored),

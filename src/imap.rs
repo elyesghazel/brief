@@ -415,7 +415,7 @@ impl Worker {
                 self.failures += 1;
                 self.emit(Event::Error { acct: self.idx(), text: e.clone() });
                 self.status(false, format!("offline: {e}"));
-                eprintln!("brief [{}] {label}: {e}", self.acc.name);
+                crate::log::error(&format!("[{}] {label}: {e}", self.acc.name));
                 // back off, but a manual refresh retries right away
                 if !manual {
                     next_sync = Instant::now() + Duration::from_secs((15 * self.failures as u64).min(300));
