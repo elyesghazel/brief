@@ -259,24 +259,46 @@ pub fn conversations(rows: Vec<Row>, mates: &[Row], me: &[String]) -> (Vec<Row>,
             conv_of[i] = c;
         }
     }
-    let mut attached: Vec<Vec<Row>> = vec![Vec::new(); groups.len()];
+    let mut attached: Vec<(usize, &Row)> = Vec::new();
+    // a message elsewhere can join two of the view's conversations (a reply to your reply that
+    // only names yours)
+    let mut parent: Vec<usize> = (0..groups.len()).collect();
     // one copy of each message: Gmail-like servers keep the same mail in several folders
     let mut msgids: Set<&str> = Set::default();
     for m in mates {
         if !m.msgid.is_empty() && (by_id.get(m.msgid.as_str()).is_some_and(|&i| rows[i].msgid == m.msgid) || !msgids.insert(&m.msgid)) {
             continue;
         }
-        let found = std::iter::once(m.msgid.as_str()).chain(m.refs.split_whitespace()).find_map(|id| by_id.get(id));
-        if let Some(&i) = found {
-            attached[conv_of[i]].push(m.clone());
+        let mut hit = std::iter::once(m.msgid.as_str()).chain(m.refs.split_whitespace()).filter_map(|id| by_id.get(id));
+        if let Some(&first) = hit.next() {
+            for &other in hit {
+                union(&mut parent, conv_of[first], conv_of[other]);
+            }
+            attached.push((conv_of[first], m));
         }
     }
     drop(by_id);
+    // groups are newest first, so the surviving root of a merge is the newest
     let mut slots: Vec<Option<Row>> = rows.into_iter().map(Some).collect();
-    let convs: Vec<Conv> = groups
+    let mut convs: Vec<Option<Conv>> = (0..groups.len()).map(|_| None).collect();
+    for (c, g) in groups.into_iter().enumerate() {
+        let root = find(&mut parent, c);
+        let conv = convs[root].get_or_insert_with(|| Conv { members: Vec::new(), mates: Vec::new() });
+        conv.members.extend(g.into_iter().map(|i| slots[i].take().unwrap()));
+    }
+    for (c, m) in attached {
+        let root = find(&mut parent, c);
+        convs[root].as_mut().unwrap().mates.push(m.clone());
+    }
+    let convs: Vec<Conv> = convs
         .into_iter()
-        .zip(attached)
-        .map(|(g, mates)| Conv { members: g.into_iter().map(|i| slots[i].take().unwrap()).collect(), mates })
+        .flatten()
+        .map(|mut c| {
+            if c.members.windows(2).any(|w| w[0].date < w[1].date) {
+                c.members.sort_by_key(|r| std::cmp::Reverse(r.date));
+            }
+            c
+        })
         .collect();
     let reps = convs.iter().map(|c| c.row(me)).collect();
     (reps, convs)
@@ -357,6 +379,34 @@ mod tests {
         // no prefix: two newsletters with one subject stay apart
         let rows = [row(1, "<a>", "", "Weekly digest", "news@x.ch", 0), row(2, "<b>", "", "Weekly digest", "news@x.ch", day)];
         assert_eq!(uids(&rows).len(), 2);
+    }
+
+    #[test]
+    fn other_folders_attach_and_bridge() {
+        let mut tom = row(1, "<a>", "", "Dinner?", "tom@x.ch", 100);
+        tom.from_name = "Tom Keller".into();
+        let mut tom2 = row(3, "<c>", "<b>", "Re: Dinner?", "tom@x.ch", 300);
+        tom2.from_name = "Tom Keller".into();
+        tom2.seen = false;
+        let anna = row(4, "<d>", "<c>", "Re: Dinner?", "anna@x.ch", 400);
+        let lone = row(5, "<z>", "", "Other", "lea@x.ch", 250);
+        let rows = vec![anna, tom2, lone, tom];
+        let mut mine = row(2, "<b>", "<a>", "Re: Dinner?", "me@x.ch", 200);
+        mine.folder = "Sent".into();
+        // a copy of a listed message in another folder, and a stranger's thread
+        let mut copy = row(9, "<d>", "<c>", "Re: Dinner?", "anna@x.ch", 400);
+        copy.folder = "Archive".into();
+        let mut stray = row(8, "<y>", "<q>", "Re: Else", "x@x.ch", 50);
+        stray.folder = "Sent".into();
+        let (list, convs) = conversations(rows, &[mine, copy, stray], &["me@x.ch".to_owned()]);
+        assert_eq!(list.len(), 2);
+        assert_eq!(convs[0].members.iter().map(|r| r.uid).collect::<Vec<_>>(), [4, 3, 1]);
+        assert_eq!(convs[0].mates.iter().map(|r| (r.folder.as_str(), r.uid)).collect::<Vec<_>>(), [("Sent", 2)]);
+        assert_eq!((list[0].uid, list[0].count, list[0].seen), (4, 4, false));
+        assert_eq!(list[0].subject, "Dinner?");
+        assert_eq!(list[0].people, "Tom, anna, me");
+        assert_eq!(convs[0].messages().iter().map(|r| r.uid).collect::<Vec<_>>(), [1, 2, 3, 4]);
+        assert_eq!((list[1].uid, list[1].count, list[1].people.as_str()), (5, 1, ""));
     }
 
     #[test]
