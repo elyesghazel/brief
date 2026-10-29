@@ -32,6 +32,8 @@ cp -r "$prefix/share/icons/Adwaita" "$out/share/icons/"
 rm -rf "$out/share/icons/Adwaita/cursors"
 mkdir -p "$out/share/icons/hicolor"
 cp "$prefix/share/icons/hicolor/index.theme" "$out/share/icons/hicolor/"
+# brief's own icon, for the default window icon (set_default_icon_name)
+cp -r assets/icons/hicolor/. "$out/share/icons/hicolor/"
 for t in Adwaita hicolor; do gtk4-update-icon-cache -q -f "$out/share/icons/$t"; done
 
 cp LICENSE "$out/"
