@@ -10,6 +10,7 @@ mod mailto;
 mod message;
 mod oauth;
 mod platform;
+mod rich;
 mod smtp;
 mod store;
 mod theme;
