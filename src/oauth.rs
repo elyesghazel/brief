@@ -15,13 +15,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// brief's own OAuth apps. A build takes them from `BRIEF_GOOGLE_CLIENT_ID`,
-/// `BRIEF_GOOGLE_CLIENT_SECRET` and `BRIEF_MICROSOFT_CLIENT_ID` when set, else from the second
-/// argument: the ids of the apps registered for brief (Google Cloud project, Entra ID app). Empty
-/// = this build has none, the user brings a client id in config.toml.
+/// brief's own Google OAuth app. A build takes it from `BRIEF_GOOGLE_CLIENT_ID` and
+/// `BRIEF_GOOGLE_CLIENT_SECRET` when set, else from the second argument: the id of the app
+/// registered for brief in its Google Cloud project. Empty = this build has none, the user brings
+/// a client id in config.toml. Microsoft has no built-in app; `[oauth.microsoft]` with an own
+/// client id still works.
 const GOOGLE_CLIENT_ID: &str = built_in(option_env!("BRIEF_GOOGLE_CLIENT_ID"), "");
 const GOOGLE_CLIENT_SECRET: &str = built_in(option_env!("BRIEF_GOOGLE_CLIENT_SECRET"), "");
-const MICROSOFT_CLIENT_ID: &str = built_in(option_env!("BRIEF_MICROSOFT_CLIENT_ID"), "");
 
 /// The build-time value unless it is missing or empty.
 const fn built_in(env: Option<&'static str>, fallback: &'static str) -> &'static str {
@@ -32,7 +32,7 @@ const fn built_in(env: Option<&'static str>, fallback: &'static str) -> &'static
 }
 
 /// The README section for people without built-in ids.
-pub const README_SECTION: &str = "\"Gmail and Outlook without app passwords\" in the README";
+pub const README_SECTION: &str = "\"Sign in with Google\" in the README";
 
 /// A token this close to expiry counts as expired.
 const MARGIN: Duration = Duration::from_secs(60);
@@ -96,7 +96,7 @@ impl Provider {
                 "https://mail.google.com/ openid email profile",
             ),
             Provider::Microsoft => o(
-                MICROSOFT_CLIENT_ID,
+                "",
                 "",
                 "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
                 "https://login.microsoftonline.com/common/oauth2/v2.0/token",
@@ -168,11 +168,6 @@ pub fn guess_provider(email: &str, imap_host: &str) -> Option<&'static str> {
         "outlook.office365.com" | "imap-mail.outlook.com" => Some("microsoft"),
         _ => None,
     }
-}
-
-/// This build (or the config) has a client id for the provider.
-pub fn has_client(o: &OAuth) -> bool {
-    !o.client_id.is_empty()
 }
 
 /// Microsoft matches loopback redirects by the name `localhost`, Google wants the address.
