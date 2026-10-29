@@ -1,0 +1,31 @@
+[package]
+name = "brief"
+version = "0.1.0"
+edition = "2024"
+description = "A keyboard-first mail client for Hyprland"
+license = "MIT"
+repository = "https://github.com/elyesghazel/brief"
+
+[dependencies]
+async-channel = "2.5.0"
+chrono = "0.4.45"
+dirs = "7.0.0"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
+html2text = "0.17.4"
+imap = { version = "3.0.0-alpha.15", default-features = false }
+imap-proto = "0.16"
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "hostname", "rustls", "ring", "webpki-roots"] }
+mail-parser = "1.0.0"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
+ureq = { version = "3.5.0", default-features = false, features = ["rustls"] }
+webkit6 = "0.6"
+webpki-roots = "1.0.11"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
