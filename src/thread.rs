@@ -81,16 +81,19 @@ impl Conv {
 pub fn base_subject(subject: &str) -> (String, bool) {
     let mut rest = subject.trim();
     let mut had = false;
-    while let Some((colon, c)) = rest.char_indices().find(|(_, c)| matches!(c, ':' | '：')) {
-        let head = rest[..colon].trim_end();
-        let head = head.trim_end_matches(|c: char| c.is_ascii_digit() || matches!(c, '[' | ']' | '(' | ')')).trim_end();
-        if !PREFIXES.iter().any(|p| head.eq_ignore_ascii_case(p)) {
-            break;
-        }
-        rest = rest[colon + c.len_utf8()..].trim_start();
+    while let Some(r) = strip_prefix(rest) {
+        rest = r;
         had = true;
     }
     (rest.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase(), had)
+}
+
+/// The subject after one leading "Re:" / "AW[2]:" / ..., if it starts with one.
+fn strip_prefix(s: &str) -> Option<&str> {
+    let (colon, c) = s.char_indices().take(12).find(|(_, c)| matches!(c, ':' | '：'))?;
+    let head = s[..colon].trim_end();
+    let head = head.trim_end_matches(|c: char| c.is_ascii_digit() || matches!(c, '[' | ']' | '(' | ')')).trim_end();
+    PREFIXES.iter().any(|p| head.eq_ignore_ascii_case(p)).then(|| s[colon + c.len_utf8()..].trim_start())
 }
 
 fn find(parent: &mut [usize], mut i: usize) -> usize {
@@ -110,20 +113,17 @@ fn union(parent: &mut [usize], a: usize, b: usize) {
 
 /// Whether two messages share a person: same sender, or one's sender among the other's recipients.
 fn related(a: &Row, b: &Row) -> bool {
-    let (fa, fb) = (a.from_addr.to_lowercase(), b.from_addr.to_lowercase());
-    !fa.is_empty() && (fa == fb || b.to.to_lowercase().contains(&fa)) || !fb.is_empty() && a.to.to_lowercase().contains(&fb)
+    let has = |hay: &str, needle: &str| {
+        !needle.is_empty() && hay.as_bytes().windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+    };
+    !a.from_addr.is_empty() && a.from_addr.eq_ignore_ascii_case(&b.from_addr) || has(&b.to, &a.from_addr) || has(&a.to, &b.from_addr)
 }
 
 /// Splits rows into conversations: groups of row indices, newest first, in the order of each
 /// group's newest message. Rows that mention a common message id are joined; a reply with no
 /// references joins the closest same-subject message with a shared person within the window,
-/// preferring earlier ones.
-pub fn group(rows: &[Row]) -> Vec<Vec<usize>> {
-    link(rows).0
-}
-
-/// `group`, plus every message id seen mapped to a row that mentions it.
-fn link(rows: &[Row]) -> (Vec<Vec<usize>>, Map<&str, usize>) {
+/// preferring earlier ones. Also returns every message id seen, mapped to a row that mentions it.
+fn group(rows: &[Row]) -> (Vec<Vec<usize>>, Map<&str, usize>) {
     let n = rows.len();
     let mut parent: Vec<usize> = (0..n).collect();
     let mut by_id: Map<&str, usize> = Map::with_capacity_and_hasher(n * 2, Default::default());
@@ -137,18 +137,20 @@ fn link(rows: &[Row]) -> (Vec<Vec<usize>>, Map<&str, usize>) {
             }
         }
     }
-    let subjects: Vec<(String, bool)> = rows.iter().map(|r| base_subject(&r.subject)).collect();
-    if subjects.iter().zip(rows).any(|((_, had), r)| *had && r.refs.is_empty()) {
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(rows[i].date));
+    // replies without references: usually none, so subjects are only normalized when there are
+    let lone: Vec<usize> = (0..n).filter(|&i| rows[i].refs.is_empty() && strip_prefix(rows[i].subject.trim()).is_some()).collect();
+    if !lone.is_empty() {
+        let bases: Vec<String> = rows.iter().map(|r| base_subject(&r.subject).0).collect();
         let mut by_subject: Map<(&str, &str), Vec<usize>> = Map::default();
-        for (i, r) in rows.iter().enumerate().filter(|(i, _)| !subjects[*i].0.is_empty()) {
-            by_subject.entry((r.acct.as_str(), subjects[i].0.as_str())).or_default().push(i);
+        for (i, r) in rows.iter().enumerate().filter(|(i, _)| !bases[*i].is_empty()) {
+            by_subject.entry((r.acct.as_str(), bases[i].as_str())).or_default().push(i);
         }
-        for (i, r) in rows.iter().enumerate() {
-            let (base, had) = &subjects[i];
-            if !had || !r.refs.is_empty() || base.is_empty() {
-                continue;
-            }
-            let best = by_subject[&(r.acct.as_str(), base.as_str())]
+        for i in lone {
+            let r = &rows[i];
+            let Some(mates) = by_subject.get(&(r.acct.as_str(), bases[i].as_str())) else { continue };
+            let best = mates
                 .iter()
                 .copied()
                 .filter(|&j| j != i && (rows[j].date - r.date).abs() <= SUBJECT_WINDOW && related(r, &rows[j]))
@@ -158,8 +160,6 @@ fn link(rows: &[Row]) -> (Vec<Vec<usize>>, Map<&str, usize>) {
             }
         }
     }
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by_key(|&i| std::cmp::Reverse(rows[i].date));
     let mut slot: Map<usize, usize> = Map::default();
     let mut out: Vec<Vec<usize>> = Vec::new();
     for i in order {
@@ -207,41 +207,75 @@ fn people(msgs: &[&Row], me: &[String]) -> String {
     }
 }
 
-/// Turns the view's rows (newest first) into one row per conversation plus its messages. `me`
-/// holds the accounts' own addresses, lowercased. Messages from other folders only attach to
-/// conversations the view already has; they never start one.
-pub fn conversations(store: &Store, view: &View, rows: Vec<Row>, me: &[String]) -> (Vec<Row>, Vec<Conv>) {
-    let (groups, by_id) = link(&rows);
+/// Ids that find a view's messages in other folders (`Store::thread_mates`): each row's thread
+/// root and own id.
+fn ids(rows: &[Row]) -> Vec<&str> {
+    let mut ids: Set<&str> = Set::with_capacity_and_hasher(rows.len() * 2, Default::default());
+    for r in rows {
+        ids.insert(root_of(&r.msgid, &r.refs));
+        ids.insert(&r.msgid);
+    }
+    ids.remove("");
+    ids.into_iter().collect()
+}
+
+/// Messages from other folders already looked up for one view, so a rebuild (a flag change, a
+/// search keystroke, new mail) only queries ids it has not asked about. Whoever sees another
+/// folder change clears it.
+#[derive(Default)]
+pub struct Mates {
+    view: Option<View>,
+    asked: Set<String>,
+    pub rows: Vec<Row>,
+}
+
+impl Mates {
+    /// Brings the cache up to date for the view's rows: one query for new ids at most.
+    pub fn fill(&mut self, store: &Store, view: &View, rows: &[Row]) {
+        if self.view.as_ref() != Some(view) {
+            *self = Mates { view: Some(view.clone()), ..Default::default() };
+        }
+        let new: Vec<&str> = ids(rows).into_iter().filter(|id| !self.asked.contains(*id)).collect();
+        if new.is_empty() {
+            return;
+        }
+        self.rows.extend(store.thread_mates(&new, view));
+        self.asked.extend(new.into_iter().map(str::to_owned));
+    }
+
+    pub fn clear(&mut self) {
+        *self = Mates::default();
+    }
+}
+
+/// Turns the view's rows (newest first) into one row per conversation plus its messages. `mates`
+/// are candidates from other folders (see `Mates`); they only attach to conversations the view
+/// already has, never start one. `me` holds the accounts' own addresses, lowercased.
+pub fn conversations(rows: Vec<Row>, mates: &[Row], me: &[String]) -> (Vec<Row>, Vec<Conv>) {
+    let (groups, by_id) = group(&rows);
     let mut conv_of = vec![0; rows.len()];
     for (c, g) in groups.iter().enumerate() {
         for &i in g {
             conv_of[i] = c;
         }
     }
-    let mut ids: Set<&str> = Set::with_capacity_and_hasher(rows.len() * 2, Default::default());
-    for r in &rows {
-        ids.insert(root_of(&r.msgid, &r.refs));
-        ids.insert(&r.msgid);
-    }
-    ids.remove("");
-    let ids: Vec<&str> = ids.into_iter().collect();
-    let mut mates: Vec<Vec<Row>> = vec![Vec::new(); groups.len()];
+    let mut attached: Vec<Vec<Row>> = vec![Vec::new(); groups.len()];
     // one copy of each message: Gmail-like servers keep the same mail in several folders
-    let mut msgids: Set<String> = Set::default();
-    for m in store.thread_mates(&ids, view) {
-        if !m.msgid.is_empty() && (by_id.get(m.msgid.as_str()).is_some_and(|&i| rows[i].msgid == m.msgid) || !msgids.insert(m.msgid.clone())) {
+    let mut msgids: Set<&str> = Set::default();
+    for m in mates {
+        if !m.msgid.is_empty() && (by_id.get(m.msgid.as_str()).is_some_and(|&i| rows[i].msgid == m.msgid) || !msgids.insert(&m.msgid)) {
             continue;
         }
         let found = std::iter::once(m.msgid.as_str()).chain(m.refs.split_whitespace()).find_map(|id| by_id.get(id));
         if let Some(&i) = found {
-            mates[conv_of[i]].push(m);
+            attached[conv_of[i]].push(m.clone());
         }
     }
     drop(by_id);
     let mut slots: Vec<Option<Row>> = rows.into_iter().map(Some).collect();
     let convs: Vec<Conv> = groups
         .into_iter()
-        .zip(mates)
+        .zip(attached)
         .map(|(g, mates)| Conv { members: g.into_iter().map(|i| slots[i].take().unwrap()).collect(), mates })
         .collect();
     let reps = convs.iter().map(|c| c.row(me)).collect();
@@ -275,7 +309,7 @@ mod tests {
     }
 
     fn uids(rows: &[Row]) -> Vec<Vec<u32>> {
-        group(rows).into_iter().map(|g| g.into_iter().map(|i| rows[i].uid).collect()).collect()
+        group(rows).0.into_iter().map(|g| g.into_iter().map(|i| rows[i].uid).collect()).collect()
     }
 
     #[test]
