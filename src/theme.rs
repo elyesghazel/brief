@@ -78,7 +78,8 @@ fn user_css(name: &str) -> Option<String> {
 const EG_CSS: &str = r#"
 .brand, .path, .sync, .statusbar, .mode, .key, .desc, .side-acct-name, .side-acct-mail, .side-key,
 .pill, .msg-date, .dialog-title, .form-label, .form-hint, .form-ok, .form-error, .r-note, .chip-size,
-.empty-title, .form-key, .step, .setup-kicker, .swatch-name, .check-detail {
+.empty-title, .form-key, .step, .setup-kicker, .swatch-name, .check-detail, .set-kicker, .set-nav-key, .set-key,
+.set-path, .set-version {
   font-family: "JetBrains Mono", "JetBrainsMono Nerd Font", monospace;
 }
 .brand { letter-spacing: -0.02em; }
@@ -103,6 +104,28 @@ fn builtin_css(t: &Builtin) -> String {
 /// Background, text and accent of a built-in theme, for the setup's theme picker.
 pub fn swatch(name: &str) -> Option<[&'static str; 3]> {
     BUILTIN.iter().find(|t| t.name == name).map(|t| [t.colors[0], t.colors[1], t.colors[5]])
+}
+
+/// Background, text and accent of any theme, user themes included, for swatches.
+pub fn preview(name: &str) -> [String; 3] {
+    let css = css(name);
+    let mut out = ["#000000".to_owned(), "#ffffff".to_owned(), "#ffffff".to_owned()];
+    for line in css.lines() {
+        let Some(rest) = line.trim().strip_prefix("@define-color ") else { continue };
+        let Some((key, value)) = rest.split_once(char::is_whitespace) else { continue };
+        let value = value.trim().trim_end_matches(';').trim();
+        // a reference to another color or anything odd would break the swatch's CSS
+        if value.is_empty() || value.contains(['@', '{', '}', ';']) {
+            continue;
+        }
+        match key {
+            "bg" => out[0] = value.to_owned(),
+            "fg" => out[1] = value.to_owned(),
+            "accent" => out[2] = value.to_owned(),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Every theme name: `zunder`, the built-ins, then user themes (brief's and zunder's).
@@ -143,6 +166,12 @@ mod tests {
                 assert!(v.len() == 7 && v.starts_with('#'), "{}: {v}", t.name);
             }
         }
+    }
+
+    #[test]
+    fn previews_read_user_themes() {
+        assert_eq!(preview("eg-light"), ["#fafafa", "#0a0a0a", "#0a0a0a"]);
+        assert_eq!(preview("no-such-theme")[2], "#b4befe");
     }
 
     #[test]
