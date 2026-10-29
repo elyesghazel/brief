@@ -23,15 +23,19 @@ usage:
   brief themes     list themes
   brief --version
 
-config: ~/.config/brief/config.toml   cache: ~/.cache/brief/mail.db
 in the app: ? shows every key, Ctrl+K every command";
+
+/// The usage text with the real config and cache paths (they differ on Windows).
+fn help() -> String {
+    format!("{HELP}\nconfig: {}\ncache:  {}", config::path().display(), store::path().display())
+}
 
 fn main() -> glib::ExitCode {
     platform::attach_console();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("-h" | "--help" | "help") => {
-            println!("{HELP}");
+            println!("{}", help());
             return glib::ExitCode::SUCCESS;
         }
         Some("-V" | "--version") => {
@@ -58,7 +62,7 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::SUCCESS;
         }
         Some(other) if !other.starts_with("--gapplication") => {
-            eprintln!("brief: unknown command {other}\n\n{HELP}");
+            eprintln!("brief: unknown command {other}\n\n{}", help());
             return glib::ExitCode::FAILURE;
         }
         _ => {}
