@@ -96,6 +96,7 @@ pub struct Form {
     steps: Vec<gtk::Label>,
     // welcome
     swatches: Vec<gtk::Box>,
+    welcome_go: gtk::Box,
     theme_idx: Cell<usize>,
     theme_before: RefCell<String>,
     first_run: Cell<bool>,
@@ -109,6 +110,10 @@ pub struct Form {
     pass_row: gtk::Box,
     pass: gtk::PasswordEntry,
     oauth_row: gtk::Box,
+    oauth_inner: gtk::Box,
+    adv_inner: gtk::Box,
+    /// Ctrl+Shift+A on the address page: open the server settings once sign-in shows.
+    want_adv: Cell<bool>,
     signin_text: gtk::Label,
     signin_hint: gtk::Label,
     adv_summary: gtk::Label,
@@ -182,6 +187,17 @@ fn row(l: &str, w: &impl IsA<gtk::Widget>) -> gtk::Box {
     b.append(&lab);
     b.append(w);
     b
+}
+
+/// Makes `w` clickable, with a pointer cursor.
+fn on_click(w: &impl IsA<gtk::Widget>, f: impl Fn() + 'static) {
+    let click = gtk::GestureClick::new();
+    click.connect_released(move |g, _, _, _| {
+        g.set_state(gtk::EventSequenceState::Claimed);
+        f();
+    });
+    w.add_controller(click);
+    w.set_cursor_from_name(Some("pointer"));
 }
 
 fn chip(text: &str) -> gtk::Label {
@@ -422,6 +438,7 @@ impl Form {
             indicator,
             steps,
             swatches,
+            welcome_go: go,
             theme_idx: Cell::new(0),
             theme_before: RefCell::new(String::new()),
             first_run: Cell::new(false),
@@ -433,6 +450,9 @@ impl Form {
             pass_row,
             pass,
             oauth_row,
+            oauth_inner,
+            adv_inner,
+            want_adv: Cell::new(false),
             signin_text,
             signin_hint,
             adv_summary,
@@ -487,6 +507,29 @@ impl Form {
         let provider = gtk::CssProvider::new();
         provider.load_from_string(&css);
         gtk::style_context_add_provider_for_display(&self.root.display(), &provider, gtk::STYLE_PROVIDER_PRIORITY_USER + 3);
+
+        for (i, cell) in self.swatches.iter().enumerate() {
+            let weak = Rc::downgrade(app);
+            on_click(cell, move || {
+                if let Some(app) = weak.upgrade() {
+                    app.form_pick_theme(i);
+                }
+            });
+        }
+        for w in [&self.welcome_go, &self.oauth_inner] {
+            let weak = Rc::downgrade(app);
+            on_click(w, move || {
+                if let Some(app) = weak.upgrade() {
+                    app.form_key("Return");
+                }
+            });
+        }
+        let weak = Rc::downgrade(app);
+        on_click(&self.adv_inner, move || {
+            if let Some(app) = weak.upgrade() {
+                app.form_key("C-S-a");
+            }
+        });
 
         let weak = Rc::downgrade(app);
         self.email.connect_changed(move |_| {
@@ -554,6 +597,7 @@ impl Form {
         self.failed.set(false);
         self.server_trouble.set(false);
         self.adv.set_reveal_child(false);
+        self.want_adv.set(false);
         self.link.replace(String::new());
         self.color_idx.set(0);
         self.show_dots();
@@ -725,8 +769,8 @@ impl Form {
         let has_link = self.method.get().is_none() && !service(&self.email.text(), None, None).app_password.is_empty();
         match self.page.get() {
             Page::Welcome => &[("← →", "theme"), ("Enter", "add your first account"), ("Esc", "skip")],
-            Page::Address if self.first_run.get() => &[("Enter", "continue"), ("Tab", "your name"), ("Esc", "back")],
-            Page::Address => &[("Enter", "continue"), ("Tab", "your name"), ("Esc", "cancel")],
+            Page::Address if self.first_run.get() => &[("Enter", "continue"), ("Tab", "your name"), ("Ctrl+Shift+A", "servers"), ("Esc", "back")],
+            Page::Address => &[("Enter", "continue"), ("Tab", "your name"), ("Ctrl+Shift+A", "servers"), ("Esc", "cancel")],
             Page::SignIn if self.again.borrow().is_some() => &[("Enter", "sign in"), ("Esc", "cancel")],
             Page::SignIn if self.method.get().is_some() => {
                 &[("Enter", "sign in"), ("Ctrl+O", "use a password"), ("Ctrl+Shift+A", "advanced"), ("Esc", "back")]
@@ -915,6 +959,10 @@ impl App {
                 f.email.grab_focus();
                 f.email.set_position(-1);
             }
+            Page::SignIn if f.want_adv.take() => {
+                f.show_method();
+                self.toggle_advanced(true);
+            }
             Page::SignIn => {
                 f.show_method();
                 if f.method.get().is_some() {
@@ -1010,6 +1058,30 @@ impl App {
     }
 
     /// Enter on the address: waits for a running lookup, then picks the method and servers.
+    /// Previews theme `i` on the welcome page.
+    fn form_pick_theme(self: &Rc<Self>, i: usize) {
+        let f = &self.form;
+        if f.page.get() != Page::Welcome {
+            return;
+        }
+        f.theme_idx.set(i);
+        f.show_swatches();
+        self.apply_theme(THEMES[i]);
+    }
+
+    /// Shows or hides the server settings on the sign-in page.
+    fn toggle_advanced(self: &Rc<Self>, open: bool) {
+        let f = &self.form;
+        f.adv.set_reveal_child(open);
+        if open {
+            f.imap_host.grab_focus();
+        } else if f.method.get().is_some() {
+            self.unfocus();
+        } else {
+            f.pass.grab_focus();
+        }
+    }
+
     fn address_next(self: &Rc<Self>) {
         let f = &self.form;
         let email = f.email.text().trim().to_owned();
@@ -1049,9 +1121,7 @@ impl App {
             (Page::Welcome, "Left" | "h" | "Right" | "l") => {
                 let n = THEMES.len();
                 let step = if matches!(k, "Left" | "h") { n - 1 } else { 1 };
-                f.theme_idx.set((f.theme_idx.get() + step) % n);
-                f.show_swatches();
-                self.apply_theme(THEMES[f.theme_idx.get()]);
+                self.form_pick_theme((f.theme_idx.get() + step) % n);
             }
             (Page::Welcome, "Return") => {
                 let name = THEMES[f.theme_idx.get()];
@@ -1063,19 +1133,13 @@ impl App {
             }
             (Page::Welcome, _) => {}
             (Page::Address, "Return") => self.address_next(),
+            (Page::Address, "C-S-a") => {
+                f.want_adv.set(true);
+                self.address_next();
+            }
             (Page::SignIn, "Return" | "C-Return") => self.form_run(),
             (Page::SignIn, "C-o") => self.switch_method(),
-            (Page::SignIn, "C-S-a") => {
-                let open = !f.adv.reveals_child();
-                f.adv.set_reveal_child(open);
-                if open {
-                    f.imap_host.grab_focus();
-                } else if f.method.get().is_some() {
-                    self.unfocus();
-                } else {
-                    f.pass.grab_focus();
-                }
-            }
+            (Page::SignIn, "C-S-a") => self.toggle_advanced(!f.adv.reveals_child()),
             (Page::SignIn, "C-l") => {
                 let svc = service(&f.email.text(), f.method.get(), None);
                 if f.method.get().is_none() && !svc.app_password.is_empty() {

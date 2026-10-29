@@ -252,6 +252,7 @@ row:selected .title  { font-weight: bold; }
 .form-key   { color: @faint; font-size: 0.8em; border: 1px solid alpha(@ghost, 0.9); border-radius: 2px; padding: 0 5px; margin-left: 10px; }
 .signin-text { color: @fg; font-weight: bold; }
 .servers-text { color: @faint; }
+.servers-text:hover, .signin-text:hover { color: @accent; }
 
 /* account setup */
 .scrim.solid { background: @bg; }
@@ -273,6 +274,7 @@ button.focus-sink { min-width: 0; min-height: 0; padding: 0; border: none; backg
 .swatches { margin-bottom: 20px; }
 .swatch-cell { padding: 3px; border: 1px solid transparent; border-radius: 3px; }
 .swatch-cell.current { border-color: @accent; }
+.swatch-cell:hover:not(.current) { border-color: alpha(@ghost, 0.9); }
 .swatch { min-width: 66px; min-height: 44px; border-radius: 2px; padding: 6px 8px; box-shadow: inset 0 0 0 1px alpha(@ghost, 0.9); }
 .swatch-fg { font-weight: bold; }
 .swatch-accent { min-width: 22px; min-height: 3px; border-radius: 1px; }
@@ -281,6 +283,7 @@ button.focus-sink { min-width: 0; min-height: 0; padding: 0; border: none; backg
 .setup-go { padding-top: 14px; border-top: 1px solid alpha(@ghost, 0.6); }
 .setup-go .form-key { margin: 0 10px 0 0; color: @bg; background: @accent; border-color: @accent; font-weight: bold; }
 .setup-go-text { color: @fg; }
+.setup-go:hover .setup-go-text { color: @accent; }
 entry.big-field, entry.big-field:focus-within {
   font-size: 1.35em; padding: 6px 0 8px; margin-bottom: 6px;
   border-bottom: 1px solid alpha(@ghost, 0.9); border-radius: 0;
