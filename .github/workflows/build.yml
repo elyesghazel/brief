@@ -17,11 +17,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
       - run: cargo test --release --locked
+      - run: packaging/linux/tarball.sh dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: brief-linux-x86_64
+          path: dist/*.tar.gz
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
-    permissions:
-      contents: write
     defaults:
       run:
         shell: msys2 {0}
@@ -51,10 +55,23 @@ jobs:
             target
           key: windows-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: windows-cargo-
+      - name: version
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$' | Select-Object -First 1).Matches[0].Groups[1].Value
+          "VERSION=$v" >> $env:GITHUB_ENV
       - run: cargo build --release --locked
       - run: cargo test --release --locked
       - run: packaging/windows/bundle.sh dist/brief
-      - run: cd dist && zip -qr9 brief-windows-x86_64.zip brief
+      - name: version info and icon
+        shell: pwsh
+        run: |
+          $v = (Get-Item dist\brief\brief.exe).VersionInfo
+          $v | Format-List ProductName, ProductVersion, FileVersion, CompanyName, FileDescription | Out-Host
+          if ($v.ProductVersion -ne $env:VERSION -or $v.CompanyName -ne "Elyes Ghazel") { throw "brief.exe lacks its version info" }
+          Add-Type -AssemblyName System.Drawing
+          if (-not [Drawing.Icon]::ExtractAssociatedIcon("$PWD\dist\brief\brief.exe")) { throw "brief.exe has no icon" }
+          if (-not (Test-Path dist\brief\share\icons\hicolor\48x48\apps\ch.elyesghazel.brief.png)) { throw "the bundle lacks the app icon" }
       # outside MSYS2, with a bare PATH, so a DLL missing from the folder fails here
       - name: smoke test
         shell: pwsh
@@ -89,19 +106,99 @@ jobs:
             if (-not $alive -or $ms -ge 30000) { throw "the window did not come up" }
             Write-Host "window up after $ms ms ($run)"
           }
+      # Inno Setup: preinstalled on some runner images, else from Chocolatey
+      - name: installer
+        shell: pwsh
+        run: |
+          $find = { Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          $iscc = & $find
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress | Out-Host
+            $iscc = & $find
+          }
+          if (-not $iscc) { throw "no ISCC.exe" }
+          Write-Host "using $($iscc.FullName) $($iscc.VersionInfo.FileVersion)"
+          & $iscc.FullName /Qp "/DBundle=$PWD\dist\brief" "/DAppVersion=$env:VERSION" "/O$PWD\dist" packaging\windows\brief.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+      # install, run, upgrade in place and uninstall, the way a user would but silent
+      - name: installer smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setup = (Resolve-Path "dist\brief-$env:VERSION-setup-x86_64.exe").Path
+          Write-Host ("installer: {0:N1} MB" -f ((Get-Item $setup).Length / 1MB))
+          $dir = "$env:LOCALAPPDATA\Programs\brief"
+          $exe = "$dir\brief.exe"
+          $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{4822F902-BA9C-45C5-B369-23435B7AD0E7}_is1"
+          $menu = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\brief.lnk"
+          $desktop = Join-Path ([Environment]::GetFolderPath("Desktop")) "brief.lnk"
+          $config = "$env:APPDATA\brief"
+          $hadConfig = Test-Path $config
+          function Must($ok, $what) { if (-not $ok) { throw $what } }
+          function Install($log) {
+            $t = Measure-Command {
+              $p = Start-Process $setup -Wait -PassThru -ArgumentList "/VERYSILENT", "/CURRENTUSER", "/SUPPRESSMSGBOXES", "/NORESTART", '/MERGETASKS="desktopicon,mailto"', "/LOG=`"$PWD\$log`""
+            }
+            Write-Host "::group::$log"; Get-Content $log | Out-Host; Write-Host "::endgroup::"
+            if ($p.ExitCode -ne 0) { throw "setup exited with $($p.ExitCode)" }
+            Write-Host ("{0}: {1:N1} s" -f $log, $t.TotalSeconds)
+          }
+          function Run {
+            $path = $env:PATH
+            $env:PATH = "C:\Windows\system32;C:\Windows"
+            try {
+              $ver = (& $exe --version | Out-String).Trim()
+              Must ($LASTEXITCODE -eq 0 -and $ver -eq "brief $env:VERSION") "brief --version printed '$ver'"
+              $themes = & $exe themes | Out-String
+              Must ($LASTEXITCODE -eq 0 -and $themes.Trim()) "brief themes failed"
+              Write-Host "$ver, $(($themes.Trim() -split "`n").Count) themes"
+            } finally { $env:PATH = $path }
+          }
+
+          Install install.log
+          Must (Test-Path $exe) "no $exe"
+          Must ((Get-Item $exe).VersionInfo.ProductVersion -eq $env:VERSION) "installed brief.exe has the wrong version"
+          Must (Test-Path $menu) "no start menu shortcut"
+          Must (Test-Path $desktop) "no desktop shortcut"
+          Must ((Get-ItemProperty $key).DisplayVersion -eq $env:VERSION) "no uninstall entry for $env:VERSION"
+          Must ((Get-ItemProperty "HKCU:\Software\Classes\brief.mailto\shell\open\command")."(default)" -like "*brief.exe*%1*") "no mailto handler"
+          Must ((Get-ItemProperty "HKCU:\Software\RegisteredApplications").brief) "not in RegisteredApplications"
+          Run
+
+          # same version again over the top: the upgrade path
+          Install upgrade.log
+          Must (-not (Test-Path "$dir\unins001.exe")) "the upgrade made a second uninstaller"
+          Run
+
+          $uninst = ((Get-ItemProperty $key).UninstallString).Trim('"')
+          $t = Measure-Command {
+            Start-Process $uninst -Wait -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"
+            # the uninstaller hands over to a copy of itself in %TEMP%: wait for that one too
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            while (((Test-Path $exe) -or (Test-Path $key)) -and $sw.ElapsedMilliseconds -lt 60000) { Start-Sleep -Milliseconds 200 }
+          }
+          Write-Host ("uninstall: {0:N1} s" -f $t.TotalSeconds)
+          Must (-not (Test-Path $dir)) "$dir is still there"
+          Must (-not (Test-Path $key)) "the uninstall entry is still there"
+          Must (-not (Test-Path $menu) -and -not (Test-Path $desktop)) "a shortcut is still there"
+          Must (-not (Test-Path "HKCU:\Software\Classes\brief.mailto")) "the mailto handler is still there"
+          Must (-not (Get-ItemProperty "HKCU:\Software\RegisteredApplications" -ErrorAction SilentlyContinue).brief) "still in RegisteredApplications"
+          if ($hadConfig) { Must (Test-Path $config) "the uninstall deleted the user's config" }
+          Write-Host "install, run, upgrade and uninstall ok"
       - uses: actions/upload-artifact@v7
         with:
-          name: brief-windows-x86_64
+          name: brief-setup-x86_64
+          path: dist/brief-*-setup-x86_64.exe
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: brief-windows-x86_64-portable
           path: dist/brief
+          if-no-files-found: error
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: screenshot
           path: dist/screenshot.png
           if-no-files-found: ignore
-      - name: release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME dist/brief-windows-x86_64.zip --generate-notes --repo $env:GITHUB_REPOSITORY
+
