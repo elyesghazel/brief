@@ -4,7 +4,7 @@
 //! The refresh token is stored like a password (keyring, else secrets.toml). Access tokens stay in
 //! memory and are refreshed when they run out or a server rejects them.
 
-use crate::config::{self, Account, OAuth};
+use crate::config::{self, Account, OAuth, Security, Server};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::rand::SecureRandom as _;
@@ -15,10 +15,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// Built-in OAuth apps, once brief has registered its own. Empty = the user brings a client id.
-const GOOGLE_CLIENT_ID: &str = "";
-const GOOGLE_CLIENT_SECRET: &str = "";
-const MICROSOFT_CLIENT_ID: &str = "";
+/// brief's own OAuth apps. A build takes them from `BRIEF_GOOGLE_CLIENT_ID`,
+/// `BRIEF_GOOGLE_CLIENT_SECRET` and `BRIEF_MICROSOFT_CLIENT_ID` when set, else from the second
+/// argument: the ids of the apps registered for brief (Google Cloud project, Entra ID app). Empty
+/// = this build has none, the user brings a client id in config.toml.
+const GOOGLE_CLIENT_ID: &str = built_in(option_env!("BRIEF_GOOGLE_CLIENT_ID"), "");
+const GOOGLE_CLIENT_SECRET: &str = built_in(option_env!("BRIEF_GOOGLE_CLIENT_SECRET"), "");
+const MICROSOFT_CLIENT_ID: &str = built_in(option_env!("BRIEF_MICROSOFT_CLIENT_ID"), "");
+
+/// The build-time value unless it is missing or empty.
+const fn built_in(env: Option<&'static str>, fallback: &'static str) -> &'static str {
+    match env {
+        Some(v) if !v.is_empty() => v,
+        _ => fallback,
+    }
+}
+
+/// The README section for people without built-in ids.
+pub const README_SECTION: &str = "\"Gmail and Outlook without app passwords\" in the README";
 
 /// A token this close to expiry counts as expired.
 const MARGIN: Duration = Duration::from_secs(60);
@@ -40,10 +54,26 @@ impl Provider {
         }
     }
 
+    pub fn name(self) -> &'static str {
+        match self {
+            Provider::Google => "google",
+            Provider::Microsoft => "microsoft",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Provider::Google => "Google",
             Provider::Microsoft => "Microsoft",
+        }
+    }
+
+    /// IMAP and SMTP for accounts of this provider, also on a custom domain.
+    pub fn servers(self) -> (Server, Server) {
+        let s = |host: &str, port, security| Server { host: host.into(), port, security };
+        match self {
+            Provider::Google => (s("imap.gmail.com", 993, Security::Tls), s("smtp.gmail.com", 465, Security::Tls)),
+            Provider::Microsoft => (s("outlook.office365.com", 993, Security::Tls), s("smtp.office365.com", 587, Security::Starttls)),
         }
     }
 
@@ -63,35 +93,86 @@ impl Provider {
                 GOOGLE_CLIENT_SECRET,
                 "https://accounts.google.com/o/oauth2/v2/auth",
                 "https://oauth2.googleapis.com/token",
-                "https://mail.google.com/",
+                "https://mail.google.com/ openid email profile",
             ),
             Provider::Microsoft => o(
                 MICROSOFT_CLIENT_ID,
                 "",
                 "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
                 "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-                "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access",
+                "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access openid profile email",
             ),
         }
     }
 }
 
+/// The provider behind a free mail address: gmail.com, googlemail.com, and Microsoft's outlook.*,
+/// hotmail.*, live.* and msn.com. Custom domains need `provider_for_mx`.
+pub fn provider_for_address(email: &str) -> Option<Provider> {
+    let domain = email.trim().rsplit_once('@')?.1.to_lowercase();
+    let (first, rest) = domain.split_once('.')?;
+    // outlook.com, hotmail.co.uk, live.de; not live.example.com
+    let tld = !rest.is_empty() && rest.split('.').count() <= 2 && rest.split('.').all(|l| (2..=3).contains(&l.len()));
+    match (first, rest) {
+        ("gmail" | "googlemail", "com") => Some(Provider::Google),
+        ("msn", "com") => Some(Provider::Microsoft),
+        ("outlook" | "hotmail" | "live", _) if tld => Some(Provider::Microsoft),
+        _ => None,
+    }
+}
+
+/// The provider that receives a domain's mail, from its MX hosts (Google Workspace, Microsoft 365).
+pub fn provider_for_mx<'a>(hosts: impl IntoIterator<Item = &'a str>) -> Option<Provider> {
+    hosts.into_iter().find_map(|h| {
+        let h = h.trim_end_matches('.').to_lowercase();
+        if h.ends_with(".google.com") || h.ends_with(".googlemail.com") {
+            Some(Provider::Google)
+        } else if h.ends_with(".mail.protection.outlook.com") {
+            Some(Provider::Microsoft)
+        } else {
+            None
+        }
+    })
+}
+
+/// Looks up a domain's MX over DNS-over-HTTPS (Cloudflare), within `timeout`. None on any error.
+pub fn lookup_mx(domain: &str, timeout: Duration) -> Option<Vec<String>> {
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(timeout)).build().into();
+    let url = std::env::var("BRIEF_DOH_URL").unwrap_or_else(|_| "https://cloudflare-dns.com/dns-query".into());
+    let body = agent
+        .get(&url)
+        .query("name", domain)
+        .query("type", "MX")
+        .header("Accept", "application/dns-json")
+        .header("User-Agent", concat!("brief-mail/", env!("CARGO_PKG_VERSION")))
+        .call()
+        .ok()?
+        .body_mut()
+        .with_config()
+        .limit(64 * 1024)
+        .read_to_string()
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let answers = v.get("Answer")?.as_array()?;
+    // "10 aspmx.l.google.com."
+    Some(answers.iter().filter_map(|a| a.get("data")?.as_str()?.split_whitespace().last().map(str::to_owned)).collect())
+}
+
 /// "google" or "microsoft" for addresses and servers that support the browser sign-in.
 pub fn guess_provider(email: &str, imap_host: &str) -> Option<&'static str> {
-    let domain = email.rsplit('@').next().unwrap_or_default().to_lowercase();
-    let host = imap_host.to_lowercase();
-    match domain.as_str() {
-        "gmail.com" | "googlemail.com" => return Some("google"),
-        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" | "outlook.de" | "hotmail.ch" => return Some("microsoft"),
-        _ => {}
+    if let Some(p) = provider_for_address(email) {
+        return Some(p.name());
     }
-    if host == "imap.gmail.com" {
-        Some("google")
-    } else if host == "outlook.office365.com" || host == "imap-mail.outlook.com" {
-        Some("microsoft")
-    } else {
-        None
+    match imap_host.to_lowercase().as_str() {
+        "imap.gmail.com" => Some("google"),
+        "outlook.office365.com" | "imap-mail.outlook.com" => Some("microsoft"),
+        _ => None,
     }
+}
+
+/// This build (or the config) has a client id for the provider.
+pub fn has_client(o: &OAuth) -> bool {
+    !o.client_id.is_empty()
 }
 
 /// Microsoft matches loopback redirects by the name `localhost`, Google wants the address.
@@ -104,9 +185,7 @@ pub fn check(o: &OAuth) -> Result<(), String> {
     let table = if o.provider.is_empty() { "custom" } else { &o.provider };
     if o.client_id.is_empty() {
         let who = Provider::from_name(&o.provider).map_or("this provider", Provider::label);
-        return Err(format!(
-            "no OAuth client id for {who}: add [oauth.{table}] with client_id = \"...\" to config.toml (see the README)"
-        ));
+        return Err(format!("this build has no {who} sign-in: add [oauth.{table}] to config.toml, see {README_SECTION}"));
     }
     if o.auth_url.is_empty() || o.token_url.is_empty() || o.scope.is_empty() {
         return Err(format!("[oauth.{table}] needs auth_url, token_url and scope"));
@@ -167,6 +246,35 @@ pub struct Tokens {
     pub access: String,
     pub refresh: Option<String>,
     pub expires: Instant,
+    /// Who signed in, from the OpenID id_token when the provider sent one.
+    pub id: Identity,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Identity {
+    pub name: String,
+    pub email: String,
+}
+
+impl Identity {
+    /// The claims of an id_token. It came straight from the token endpoint over TLS, so the
+    /// signature is not checked (OpenID Connect Core 3.1.3.7).
+    fn from_jwt(jwt: &str) -> Identity {
+        let claims = jwt
+            .split('.')
+            .nth(1)
+            .and_then(|p| URL_SAFE_NO_PAD.decode(p.trim_end_matches('=')).ok())
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+        let Some(c) = claims else { return Identity::default() };
+        let s = |k: &str| c.get(k).and_then(|x| x.as_str()).unwrap_or_default().trim().to_owned();
+        Identity { name: s("name"), email: s("email") }
+    }
+}
+
+/// The browser signed in a different Google account than the form's address.
+pub fn other_account(typed: &str, id: &Identity) -> Option<String> {
+    let norm = |a: &str| a.trim().to_lowercase().replace("@googlemail.com", "@gmail.com");
+    (!id.email.is_empty() && norm(&id.email) != norm(typed)).then(|| id.email.clone())
 }
 
 impl Tokens {
@@ -195,7 +303,8 @@ fn parse_tokens(body: &str, now: Instant) -> Result<Tokens, String> {
         Some(serde_json::Value::String(t)) => t.parse().ok(),
         _ => None,
     };
-    Ok(Tokens { access, refresh: s("refresh_token"), expires: now + Duration::from_secs(secs.unwrap_or(3600)) })
+    let id = s("id_token").map(|t| Identity::from_jwt(&t)).unwrap_or_default();
+    Ok(Tokens { access, refresh: s("refresh_token"), expires: now + Duration::from_secs(secs.unwrap_or(3600)), id })
 }
 
 fn post_form(url: &str, form: &[(&str, &str)]) -> Result<Tokens, String> {
@@ -249,17 +358,27 @@ fn parse_callback(request_line: &str, state: &str) -> Result<Option<String>, Str
     Ok(Some(code.clone()))
 }
 
+/// The page the browser lands on after the sign-in: black on white (white on black in dark
+/// mode), nothing loaded from elsewhere.
 fn respond(mut stream: TcpStream, ok: bool, text: &str) {
     let text = text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
     let title = if ok { "Signed in" } else { "Sign-in failed" };
     let html = format!(
-        "<!doctype html><meta charset=utf-8><title>brief</title>\
-         <body style=\"font:16px sans-serif;margin:4em auto;max-width:32em\"><h2>brief: {title}</h2><p>{text}</p></body>"
+        "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width\">\
+         <title>brief: {title}</title><style>\
+         :root{{color-scheme:light dark}}\
+         body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#fff;color:#000;\
+         font:15px/1.5 system-ui,-apple-system,\"Segoe UI\",sans-serif}}\
+         main{{border:1px solid currentColor;border-radius:3px;padding:28px 32px;max-width:26em;margin:24px}}\
+         b{{display:block;font-size:12px;letter-spacing:.12em;text-transform:uppercase;opacity:.55;margin-bottom:14px}}\
+         h1{{font-size:20px;margin:0 0 6px}}p{{margin:0;opacity:.75}}\
+         @media(prefers-color-scheme:dark){{body{{background:#000;color:#fff}}}}\
+         </style><main><b>brief</b><h1>{title}</h1><p>{text}</p></main></html>"
     );
     let status = if ok { "200 OK" } else { "400 Bad Request" };
     let _ = write!(
         stream,
-        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{html}",
         html.len()
     );
 }
@@ -293,7 +412,7 @@ fn wait_for_code(listeners: &[TcpListener], state: &str, cancel: &AtomicBool) ->
                 respond(stream, true, "You can close this tab and go back to brief.");
                 return Ok(code);
             }
-            Ok(None) => respond(stream, false, "Nothing to see here."),
+            Ok(None) => respond(stream, false, "This is not the page brief is waiting for."),
             Err(e) => {
                 respond(stream, false, &e);
                 return Err(e);
@@ -335,6 +454,18 @@ fn cache() -> &'static Mutex<HashMap<String, Tokens>> {
 
 pub fn remember(acc: &Account, tokens: &Tokens) {
     cache().lock().unwrap().insert(acc.email.clone(), tokens.clone());
+    signed_out().lock().unwrap().remove(&acc.email);
+}
+
+/// Addresses whose sign-in ran out or was revoked; they need the browser again.
+fn signed_out() -> &'static Mutex<std::collections::HashSet<String>> {
+    static SET: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    SET.get_or_init(Default::default)
+}
+
+/// The account has to sign in with the browser again before it can sync.
+pub fn needs_sign_in(acc: &Account) -> bool {
+    acc.is_oauth() && signed_out().lock().unwrap().contains(&acc.email)
 }
 
 /// Drops the access token after a server refused it, so the next call refreshes.
@@ -352,13 +483,18 @@ pub fn access_token(acc: &Account) -> Result<String, String> {
             return Ok(t.access.clone());
         }
     check(&acc.oauth)?;
+    let again = |why: &str| {
+        eprintln!("brief [{}] sign-in gone: {why}", acc.name);
+        signed_out().lock().unwrap().insert(acc.email.clone());
+        format!("signed out, sign in again (Ctrl+K, or `brief login {}`)", acc.name)
+    };
     let stored = match cached.and_then(|t| t.refresh) {
         Some(r) => r,
-        None => acc.refresh_token()?,
+        None => acc.refresh_token().map_err(|e| again(&e))?,
     };
     let mut tokens = refresh(&acc.oauth, &stored).map_err(|e| {
         if e.starts_with("invalid_grant") {
-            format!("sign-in for {} expired, run `brief login {}`: {e}", acc.email, acc.name)
+            again(&e)
         } else {
             format!("token refresh: {e}")
         }
@@ -443,6 +579,60 @@ mod tests {
     }
 
     #[test]
+    fn built_in_ids() {
+        assert_eq!(built_in(Some("from-env"), "in-source"), "from-env");
+        assert_eq!(built_in(Some(""), "in-source"), "in-source");
+        assert_eq!(built_in(None, "in-source"), "in-source");
+        assert_eq!(Provider::Google.defaults().client_id, GOOGLE_CLIENT_ID);
+        assert_eq!(Provider::Microsoft.defaults().client_secret, "");
+        assert!(Provider::Microsoft.defaults().auth_url.contains("/common/"));
+    }
+
+    #[test]
+    fn free_mail_domains() {
+        use Provider::*;
+        for (addr, want) in [
+            ("me@gmail.com", Some(Google)),
+            ("Me@GoogleMail.com", Some(Google)),
+            ("me@outlook.com", Some(Microsoft)),
+            ("me@outlook.de", Some(Microsoft)),
+            ("me@hotmail.co.uk", Some(Microsoft)),
+            ("me@hotmail.ch", Some(Microsoft)),
+            ("me@live.com", Some(Microsoft)),
+            ("me@live.de", Some(Microsoft)),
+            ("me@msn.com", Some(Microsoft)),
+            ("me@gmail.ch", None),
+            ("me@live.example.com", None),
+            ("me@outlookfans.com", None),
+            ("me@firma.ch", None),
+            ("me@live", None),
+            ("gmail.com", None),
+        ] {
+            assert_eq!(provider_for_address(addr), want, "{addr}");
+        }
+    }
+
+    #[test]
+    fn mx_hosts() {
+        assert_eq!(provider_for_mx(["alt1.aspmx.l.google.com.", "aspmx.l.google.com."]), Some(Provider::Google));
+        assert_eq!(provider_for_mx(["firma-ch.mail.protection.outlook.com"]), Some(Provider::Microsoft));
+        assert_eq!(provider_for_mx(["mx01.mail.ch", "smtp.google.com.evil.ch"]), None);
+        assert_eq!(provider_for_mx([]), None);
+    }
+
+    #[test]
+    fn id_tokens() {
+        let claims = URL_SAFE_NO_PAD.encode(r#"{"email":"me@gmail.com","name":"Elyes G","sub":"1"}"#);
+        let t = parse_tokens(&format!(r#"{{"access_token":"a","id_token":"eyJhbGciOiJub25lIn0.{claims}.sig"}}"#), Instant::now()).unwrap();
+        assert_eq!(t.id, Identity { name: "Elyes G".into(), email: "me@gmail.com".into() });
+        assert_eq!(Identity::from_jwt("garbage"), Identity::default());
+        assert_eq!(other_account("me@googlemail.com", &t.id), None);
+        assert_eq!(other_account("ME@gmail.com", &t.id), None);
+        assert_eq!(other_account("you@gmail.com", &t.id).as_deref(), Some("me@gmail.com"));
+        assert_eq!(other_account("you@gmail.com", &Identity::default()), None);
+    }
+
+    #[test]
     fn providers_and_checks() {
         assert_eq!(guess_provider("me@gmail.com", ""), Some("google"));
         assert_eq!(guess_provider("me@hotmail.ch", ""), Some("microsoft"));
@@ -452,7 +642,8 @@ mod tests {
         let mut o = Provider::Google.defaults();
         o.provider = "google".into();
         o.client_id.clear();
-        assert!(check(&o).unwrap_err().contains("[oauth.google]"));
+        let e = check(&o).unwrap_err();
+        assert!(e.contains("[oauth.google]") && e.contains("README") && !e.contains('\n'));
         o.client_id = "x".into();
         assert!(check(&o).is_ok());
         assert!(check(&OAuth { client_id: "x".into(), ..Default::default() }).is_err());

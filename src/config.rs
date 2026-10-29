@@ -284,8 +284,8 @@ theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # signature = "-- \nMe"
 # color = "#f9e2af"
 #
-# Gmail / Outlook can sign in through the browser instead (Ctrl+O in the form, or `brief login
-# <name>`), with your own OAuth client id:
+# Gmail / Outlook sign in through the browser (the form does it, or `brief login <name>`).
+# Builds without brief's own OAuth apps need your client id:
 #
 # [oauth.google]
 # client_id = "1234-abc.apps.googleusercontent.com"
@@ -329,7 +329,12 @@ impl Config {
             acc.oauth.fill(shared);
         }
         if let Some(p) = crate::oauth::Provider::from_name(&acc.oauth.provider) {
-            acc.oauth.fill(&p.defaults());
+            let mut builtin = p.defaults();
+            // an own client id goes with its own secret, never with brief's
+            if !acc.oauth.client_id.is_empty() {
+                builtin.client_secret.clear();
+            }
+            acc.oauth.fill(&builtin);
         }
         acc
     }
@@ -485,14 +490,13 @@ pub fn secrets_file_store(email: &str, pass: &str) -> std::io::Result<()> {
 
 /// Server presets for well-known providers, else a guess from the domain.
 pub fn guess_servers(email: &str) -> (Server, Server) {
+    if let Some(p) = crate::oauth::provider_for_address(email) {
+        return p.servers();
+    }
     let domain = email.rsplit('@').next().unwrap_or_default().to_lowercase();
     let s = |host: &str, port, security| Server { host: host.into(), port, security };
     use Security::*;
     match domain.as_str() {
-        "gmail.com" | "googlemail.com" => (s("imap.gmail.com", 993, Tls), s("smtp.gmail.com", 465, Tls)),
-        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" | "outlook.de" | "hotmail.ch" => {
-            (s("outlook.office365.com", 993, Tls), s("smtp.office365.com", 587, Starttls))
-        }
         "icloud.com" | "me.com" | "mac.com" => (s("imap.mail.me.com", 993, Tls), s("smtp.mail.me.com", 587, Starttls)),
         "yahoo.com" | "ymail.com" => (s("imap.mail.yahoo.com", 993, Tls), s("smtp.mail.yahoo.com", 465, Tls)),
         "fastmail.com" | "fastmail.fm" => (s("imap.fastmail.com", 993, Tls), s("smtp.fastmail.com", 465, Tls)),
@@ -591,11 +595,49 @@ smtp = { host = "mail.example.com", port = 587 }
         let accs: Vec<Account> = cfg.accounts.iter().map(|a| cfg.resolve_oauth(a.clone())).collect();
         assert_eq!(accs[0].oauth.provider, "google");
         assert_eq!(accs[0].oauth.client_id, "shared-id");
-        assert_eq!(accs[0].oauth.scope, "https://mail.google.com/");
+        assert!(accs[0].oauth.scope.starts_with("https://mail.google.com/"));
         assert_eq!(accs[1].oauth.client_id, "own-id");
         assert_eq!(accs[1].oauth.client_secret, "shared-secret");
         assert!(!accs[2].is_oauth());
         assert_eq!(accs[2].oauth, OAuth::default());
+    }
+
+    #[test]
+    fn oauth_override_order() {
+        let (imap, smtp) = guess_servers("me@outlook.com");
+        let mut acc = Account {
+            name: "O".into(),
+            email: "me@outlook.com".into(),
+            display_name: String::new(),
+            user: String::new(),
+            imap,
+            smtp,
+            password_cmd: String::new(),
+            password: String::new(),
+            auth: Auth::Oauth2,
+            oauth: OAuth::default(),
+            signature: String::new(),
+            color: String::new(),
+        };
+        let builtin = crate::oauth::Provider::Microsoft.defaults();
+        // nothing configured: the built-in app
+        let plain = Config::default().resolve_oauth(acc.clone());
+        assert_eq!(plain.oauth.provider, "microsoft");
+        assert_eq!(plain.oauth.client_id, builtin.client_id);
+        assert_eq!(plain.oauth.auth_url, builtin.auth_url);
+        // [oauth.microsoft] beats the built-in app, the account beats both
+        let mut cfg = Config::default();
+        cfg.oauth.insert("microsoft".into(), OAuth { client_id: "shared".into(), auth_url: "http://mock/auth".into(), ..Default::default() });
+        let shared = cfg.resolve_oauth(acc.clone());
+        assert_eq!((shared.oauth.client_id.as_str(), shared.oauth.auth_url.as_str()), ("shared", "http://mock/auth"));
+        assert_eq!(shared.oauth.token_url, builtin.token_url);
+        acc.oauth.client_id = "mine".into();
+        assert_eq!(cfg.resolve_oauth(acc.clone()).oauth.client_id, "mine");
+        // an own Google client never gets brief's secret
+        let mut g = acc.clone();
+        g.email = "me@gmail.com".into();
+        g.oauth = OAuth { provider: "google".into(), client_id: "mine".into(), ..Default::default() };
+        assert_eq!(Config::default().resolve_oauth(g).oauth.client_secret, "");
     }
 
     const SEVERAL: &str = r#"# my mail
