@@ -284,6 +284,12 @@ impl Store {
         tx.commit().unwrap();
     }
 
+    /// Everything cached for an account, when it is removed.
+    pub fn delete_account(&self, acct: &str) {
+        let _ = self.db.execute("DELETE FROM msgs WHERE acct = ?1", [acct]);
+        let _ = self.db.execute("DELETE FROM folders WHERE acct = ?1", [acct]);
+    }
+
     pub fn set_body(&self, acct: &str, folder: &str, uid: u32, raw: &[u8], preview: &str, attach: bool) {
         let _ = self.db.execute(
             "UPDATE msgs SET raw = ?4, preview = ?5, attach = ?6 WHERE acct = ?1 AND folder = ?2 AND uid = ?3",
@@ -537,6 +543,11 @@ mod tests {
         assert_eq!(s.list(&view, "is:unread", 50).len(), 1);
         s.trim("a", "INBOX", 1);
         assert_eq!(s.list(&view, "", 50).len(), 1);
+        s.set_folders("b", &[("INBOX".into(), "/".into(), "inbox".into())]);
+        s.put_headers("b", "INBOX", &[header(1, "Other", 30)]);
+        s.delete_account("a");
+        assert!(s.folders("a").is_empty() && s.list(&view, "", 50).is_empty());
+        assert_eq!(s.list(&View::Unified, "", 50).len(), 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 
