@@ -74,6 +74,16 @@ pub fn path() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("brief/mail.db")
 }
 
+/// The cache's size on disk, its write-ahead log included.
+pub fn disk_size() -> u64 {
+    let db = path();
+    ["", "-wal", "-shm"]
+        .iter()
+        .filter_map(|s| std::fs::metadata(format!("{}{s}", db.display())).ok())
+        .map(|m| m.len())
+        .sum()
+}
+
 impl Store {
     pub fn open() -> rusqlite::Result<Store> {
         Self::open_at(&path())
@@ -124,6 +134,33 @@ impl Store {
         } else {
             self.db.execute("DELETE FROM trusted WHERE domain = ?1", [who])
         };
+    }
+
+    /// Every sender with remote content allowed, sorted.
+    pub fn trusted(&self) -> Vec<String> {
+        let mut st = self.db.prepare_cached("SELECT domain FROM trusted ORDER BY domain").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().flatten().collect()
+    }
+
+    /// Moves an account's cache to a new label. Leftovers under the new label (an account removed
+    /// while its worker was still writing) go first. The worker must be stopped.
+    pub fn rename_account(&mut self, old: &str, new: &str) -> rusqlite::Result<()> {
+        let tx = self.db.transaction()?;
+        for sql in [
+            "DELETE FROM msgs WHERE acct = ?2",
+            "DELETE FROM folders WHERE acct = ?2",
+            "UPDATE msgs SET acct = ?2 WHERE acct = ?1",
+            "UPDATE folders SET acct = ?2 WHERE acct = ?1",
+        ] {
+            tx.execute(sql, params![old, new])?;
+        }
+        tx.commit()
+    }
+
+    /// Drops every cached folder and message (the allowed senders stay) and gives the space back.
+    /// The workers must be stopped.
+    pub fn clear(&self) -> rusqlite::Result<()> {
+        self.db.execute_batch("DELETE FROM msgs; DELETE FROM folders; VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
     }
 
     pub fn folders(&self, acct: &str) -> Vec<Folder> {
@@ -548,6 +585,46 @@ mod tests {
         s.delete_account("a");
         assert!(s.folders("a").is_empty() && s.list(&view, "", 50).is_empty());
         assert_eq!(s.list(&View::Unified, "", 50).len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rename_keeps_the_cache() {
+        let dir = std::env::temp_dir().join(format!("brief-test-rename-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut s = Store::open_at(&dir.join("mail.db")).unwrap();
+        s.set_folders("Work", &[("INBOX".into(), "/".into(), "inbox".into()), ("Sent".into(), "/".into(), "sent".into())]);
+        s.put_headers("Work", "INBOX", &[header(1, "Plan", 10), header(2, "Invoice", 20)]);
+        s.set_body("Work", "INBOX", 1, b"Subject: Plan\r\n\r\nhi", "hi", false);
+        s.set_counts("Work", "INBOX", 2, 2);
+        s.set_uidvalidity("Work", "INBOX", 7);
+        // stale rows of an older account with the new label
+        s.set_folders("Job", &[("Old".into(), "/".into(), String::new())]);
+        s.put_headers("Job", "Old", &[header(9, "Stale", 5)]);
+        s.set_folders("Home", &[("INBOX".into(), "/".into(), "inbox".into())]);
+        s.put_headers("Home", "INBOX", &[header(1, "Other", 30)]);
+        s.set_trusted("news.example.com", true);
+
+        s.rename_account("Work", "Job").unwrap();
+        let job = View::Folder { acct: "Job".into(), folder: "INBOX".into() };
+        assert_eq!(s.list(&job, "", 50).iter().map(|r| r.uid).collect::<Vec<_>>(), [2, 1]);
+        assert!(s.list(&job, "", 50).iter().all(|r| r.acct == "Job"));
+        assert_eq!(s.folders("Job").iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["INBOX", "Sent"]);
+        assert_eq!(s.folders("Job")[0].unseen, 2);
+        assert_eq!(s.uidvalidity("Job", "INBOX"), 7);
+        assert!(s.raw("Job", "INBOX", 1).is_some());
+        assert!(s.folders("Work").is_empty());
+        assert_eq!(s.list(&View::Folder { acct: "Work".into(), folder: "INBOX".into() }, "", 50).len(), 0);
+        assert_eq!(s.list(&View::Folder { acct: "Job".into(), folder: "Old".into() }, "", 50).len(), 0);
+        assert_eq!(s.list(&View::Unified, "", 50).len(), 3);
+        // a second rename back is just as clean
+        s.rename_account("Job", "Work").unwrap();
+        assert_eq!(s.list(&View::Folder { acct: "Work".into(), folder: "INBOX".into() }, "", 50).len(), 2);
+
+        assert_eq!(s.trusted(), ["news.example.com"]);
+        s.clear().unwrap();
+        assert!(s.folders("Work").is_empty() && s.folders("Home").is_empty());
+        assert_eq!(s.trusted(), ["news.example.com"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
