@@ -561,20 +561,23 @@ mod tests {
             times.sort();
             (f(), times[25])
         };
-        let (n, plain) = median(&|| s.list(&view, "", 5000).len());
-        let (c, cold) = median(&|| {
-            let rows = s.list(&view, "", 5000);
-            let mut mates = crate::thread::Mates::default();
-            mates.fill(&s, &view, &rows);
-            crate::thread::conversations(rows, &mates.rows, &me).0.len()
-        });
-        let mates = std::cell::RefCell::new(crate::thread::Mates::default());
-        let (_, warm) = median(&|| {
-            let rows = s.list(&view, "", 5000);
-            mates.borrow_mut().fill(&s, &view, &rows);
-            crate::thread::conversations(rows, &mates.borrow().rows, &me).0.len()
-        });
-        eprintln!("median of 51: list {n} rows {plain:?}; as {c} conversations {cold:?}, other folders cached {warm:?}");
+        // the default cache_limit, and everything
+        for limit in [1000, 5000] {
+            let (n, plain) = median(&|| s.list(&view, "", limit).len());
+            let (c, cold) = median(&|| {
+                let rows = s.list(&view, "", limit);
+                let mut mates = crate::thread::Mates::default();
+                mates.fill(&s, &view, &rows);
+                crate::thread::conversations(rows, &mates.rows, &me).0.len()
+            });
+            let mates = std::cell::RefCell::new(crate::thread::Mates::default());
+            let (_, warm) = median(&|| {
+                let rows = s.list(&view, "", limit);
+                mates.borrow_mut().fill(&s, &view, &rows);
+                crate::thread::conversations(rows, &mates.borrow().rows, &me).0.len()
+            });
+            eprintln!("median of 51: list {n} rows {plain:?}; as {c} conversations {cold:?}, other folders cached {warm:?}");
+        }
     }
 
     #[test]
