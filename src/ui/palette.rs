@@ -1,4 +1,5 @@
-//! Ctrl+K command palette (also the theme, folder, link and attachment pickers) and the `?` help.
+//! Ctrl+K command palette (also the theme, folder, link, attachment and account pickers), the
+//! confirm dialog for destructive commands and the `?` help.
 
 use super::{App, Mode, display_folder, label, open_uri};
 use crate::config;
@@ -20,6 +21,43 @@ pub struct Item {
 
 fn item(title: impl Into<String>, sub: impl Into<String>, run: impl Fn(&Rc<App>) + 'static) -> Item {
     Item { title: title.into(), sub: sub.into(), run: Rc::new(run), preview: None }
+}
+
+/// A question before a destructive command: Enter or y does it, Esc or n backs out.
+pub struct Confirm {
+    pub root: gtk::Box,
+    title: gtk::Label,
+    text: gtk::Label,
+    yes: gtk::Label,
+    run: RefCell<Option<Action>>,
+}
+
+impl Confirm {
+    pub fn new() -> Confirm {
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.add_css_class("dialog");
+        root.add_css_class("confirm");
+        root.set_halign(gtk::Align::Center);
+        root.set_valign(gtk::Align::Start);
+        root.set_margin_top(110);
+        root.set_size_request(520, -1);
+        root.set_focusable(true);
+        let title = label("", "dialog-title");
+        root.append(&title);
+        let text = label("", "confirm-text");
+        text.set_wrap(true);
+        text.set_max_width_chars(60);
+        root.append(&text);
+        let keys = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        keys.add_css_class("confirm-keys");
+        let yes = label("", "confirm-yes");
+        keys.append(&label("Enter / y", "help-key"));
+        keys.append(&yes);
+        keys.append(&label("Esc / n", "help-key"));
+        keys.append(&label("cancel", "help-desc"));
+        root.append(&keys);
+        Confirm { root, title, text, yes, run: RefCell::new(None) }
+    }
 }
 
 pub struct Palette {
@@ -205,6 +243,38 @@ impl App {
         true
     }
 
+    /// Asks before `run`; `verb` names what Enter does.
+    pub fn confirm(self: &Rc<Self>, title: &str, text: &str, verb: &str, run: impl Fn(&Rc<App>) + 'static) {
+        let c = &self.confirm;
+        c.title.set_text(title);
+        c.text.set_text(text);
+        c.yes.set_text(verb);
+        *c.run.borrow_mut() = Some(Rc::new(run));
+        self.show_overlay(c.root.upcast_ref());
+        self.set_mode(Mode::Confirm);
+        c.root.grab_focus();
+    }
+
+    pub fn confirm_key(self: &Rc<Self>, k: &str) -> bool {
+        match k {
+            "Return" | "y" | "Y" => {
+                let run = self.confirm.run.borrow_mut().take();
+                self.hide_overlay();
+                if let Some(run) = run {
+                    run(self);
+                }
+            }
+            "Escape" | "n" | "N" | "q" | "C-c" | "C-g" => {
+                self.confirm.run.borrow_mut().take();
+                self.hide_overlay();
+                self.toast("cancelled", false);
+            }
+            // nothing else gets through while the question is up
+            _ => {}
+        }
+        true
+    }
+
     pub fn open_palette_main(self: &Rc<Self>) {
         let mut items = vec![
             item("Compose", "c", |a| a.compose_new()),
@@ -239,6 +309,7 @@ impl App {
             ),
             item("Theme…", "t", |a| a.open_palette_themes()),
             item("Add account…", "A", |a| a.open_form()),
+            item("Remove account…", "", |a| a.open_palette_remove_account()),
             item("Open config file", "", |_| open_uri(&config::path().to_string_lossy())),
             item("All inboxes", "0", |a| a.open_view(View::Unified)),
             item("Keyboard shortcuts", "?", |a| a.show_help()),
@@ -309,6 +380,34 @@ impl App {
         if let Some(p) = pos {
             self.pal.select(self, p, false);
         }
+    }
+
+    pub fn open_palette_remove_account(self: &Rc<Self>) {
+        if self.stack.visible_child_name().as_deref() == Some("compose") {
+            self.toast("close the composer first", true);
+            return;
+        }
+        let items: Vec<Item> = self
+            .accounts
+            .borrow()
+            .iter()
+            .enumerate()
+            .map(|(i, acc)| {
+                let (name, email) = (acc.name.clone(), acc.email.clone());
+                item(format!("Remove {name}"), email.clone(), move |a| {
+                    let text = format!(
+                        "Takes {email} out of brief: its block in config.toml, its saved password and its cached mail. \
+                         The mail on the server is not touched; add the account again with A."
+                    );
+                    a.confirm(&format!("remove {name}?"), &text, "remove", move |a| a.remove_account(i));
+                })
+            })
+            .collect();
+        if items.is_empty() {
+            self.toast("no accounts", false);
+            return;
+        }
+        self.open_palette("remove which account", items, "", None);
     }
 
     pub fn open_palette_links(self: &Rc<Self>) {

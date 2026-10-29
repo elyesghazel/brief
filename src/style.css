@@ -196,6 +196,7 @@ textview.body { padding: 18px 28px 30px; font-size: 1.04em; }
 .statusbar { padding: 4px 14px; border-top: 1px solid alpha(@ghost, 0.7); background: shade(@bg, 0.94); font-size: 0.9em; }
 .mode      { color: @bg; background: @accent; font-weight: bold; padding: 0 8px; border-radius: 2px; margin-right: 14px; font-size: 0.85em; }
 .mode.insert { background: @green; }
+.mode.danger { background: @red; }
 .key       { color: @muted; margin-right: 5px; font-family: monospace; }
 .desc      { color: @faint; margin-right: 16px; }
 .toast     { color: @fg; }
@@ -212,6 +213,11 @@ textview.body { padding: 18px 28px 30px; font-size: 1.04em; }
   box-shadow: 0 24px 64px alpha(black, 0.55);
 }
 .dialog-title { color: @accent; font-weight: bold; padding: 0 20px 10px; }
+.confirm { border-color: alpha(@red, 0.8); }
+.confirm .dialog-title { color: @red; }
+.confirm-text { color: @fg; padding: 0 20px 4px; }
+.confirm-keys { padding: 12px 20px 0; }
+.confirm-yes  { color: @red; font-weight: bold; margin-right: 28px; }
 .dialog separator { background: alpha(@ghost, 0.8); min-height: 1px; }
 
 .prompt { padding: 0 20px 12px; }

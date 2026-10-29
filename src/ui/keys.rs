@@ -78,6 +78,7 @@ fn handle(app: &Rc<App>, k: &str) -> bool {
             true
         }
         Mode::Palette => app.palette_key(k),
+        Mode::Confirm => app.confirm_key(k),
         Mode::Form => app.form_key(k),
         Mode::Compose => app.compose_key(k),
         Mode::Search => match k {

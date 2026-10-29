@@ -37,6 +37,8 @@ pub enum Mode {
     Help,
     Form,
     Compose,
+    /// A destructive command waits for y / Esc.
+    Confirm,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -114,6 +116,7 @@ pub struct App {
 
     overlay_scrim: gtk::Box,
     pal: palette::Palette,
+    confirm: palette::Confirm,
     help: gtk::Box,
     form: form::Form,
     pub compose: compose::Compose,
@@ -434,9 +437,10 @@ fn build(app: &gtk::Application) -> Rc<App> {
     scrim.set_visible(false);
     overlay.add_overlay(&scrim);
     let pal = palette::Palette::new();
+    let confirm = palette::Confirm::new();
     let help = palette::help_dialog();
     let form = form::Form::new();
-    for w in [&pal.root, &help, &form.root] {
+    for w in [&pal.root, &confirm.root, &help, &form.root] {
         w.set_visible(false);
         scrim.append(w);
     }
@@ -506,6 +510,7 @@ fn build(app: &gtk::Application) -> Rc<App> {
         pending: RefCell::new(String::new()),
         overlay_scrim: scrim,
         pal,
+        confirm,
         help,
         form,
         compose,
@@ -537,12 +542,7 @@ fn build(app: &gtk::Application) -> Rc<App> {
         && let Some(row) = app.side.row_at_index(start as i32) {
             app.side.select_row(Some(&row));
         }
-    let first_view = if app.accounts.borrow().len() == 1 {
-        app.inbox_of(0).map(|f| View::Folder { acct: app.accounts.borrow()[0].name.clone(), folder: f }).unwrap_or(View::Unified)
-    } else {
-        View::Unified
-    };
-    app.open_view(first_view);
+    app.open_view(app.home_view());
     app.set_focus(Pane::List);
     app.set_mode(Mode::Normal);
     win.present();
@@ -695,6 +695,57 @@ impl App {
         self.toast(&format!("added {}, syncing…", self.accounts.borrow()[idx].name), false);
     }
 
+    /// Takes an account out of brief: its config block, saved password, cache and worker. The
+    /// mail on the server stays.
+    pub fn remove_account(self: &Rc<Self>, i: usize) {
+        let Some(acc) = self.accounts.borrow().get(i).cloned() else { return };
+        if self.stack.visible_child_name().as_deref() == Some("compose") {
+            self.toast("close the composer first", true);
+            return;
+        }
+        if let Err(e) = config::remove_account(&acc.name) {
+            self.toast(&e, true);
+            return;
+        }
+        {
+            let mut workers = self.workers.borrow_mut();
+            if i < workers.len() {
+                workers.remove(i).send(Cmd::Stop);
+            }
+            // events name accounts by position
+            for (j, w) in workers.iter().enumerate().skip(i) {
+                w.set_idx(j);
+            }
+        }
+        self.accounts.borrow_mut().remove(i);
+        self.cfg.borrow_mut().accounts.retain(|a| a.name != acc.name);
+        if i < self.sync_state.borrow().len() {
+            self.sync_state.borrow_mut().remove(i);
+        }
+        if !self.accounts.borrow().iter().any(|a| a.email == acc.email) {
+            config::forget_password(&acc.email);
+        }
+        self.store.borrow().delete_account(&acc.name);
+        self.marked.borrow_mut().retain(|k| k.0 != acc.name);
+        if self.current.borrow().as_ref().is_some_and(|(r, _)| r.acct == acc.name) {
+            self.clear_reader();
+        }
+        self.apply_acct_css();
+        self.rebuild_side();
+        let stale = match &*self.view.borrow() {
+            View::Folder { acct, .. } => *acct == acc.name,
+            View::Unified => self.accounts.borrow().len() < 2,
+        };
+        if stale {
+            self.open_view(self.home_view());
+        } else {
+            self.reload_list();
+        }
+        self.update_sync();
+        self.update_title();
+        self.toast(&format!("removed {}, its mail on the server is untouched", acc.name), false);
+    }
+
     pub fn send(&self, acct: usize, cmd: Cmd) {
         if let Some(w) = self.workers.borrow().get(acct) {
             w.send(cmd);
@@ -708,6 +759,15 @@ impl App {
     pub fn folder_with_role(&self, acct: usize, role: &str) -> Option<String> {
         let name = self.accounts.borrow().get(acct)?.name.clone();
         self.store.borrow().folders(&name).into_iter().find(|f| f.role == role).map(|f| f.name)
+    }
+
+    /// The inbox of a single account, else every inbox.
+    fn home_view(&self) -> View {
+        if self.accounts.borrow().len() == 1 {
+            self.inbox_of(0).map(|f| View::Folder { acct: self.accounts.borrow()[0].name.clone(), folder: f }).unwrap_or(View::Unified)
+        } else {
+            View::Unified
+        }
     }
 
     fn inbox_of(&self, acct: usize) -> Option<String> {
@@ -888,12 +948,18 @@ impl App {
             Mode::Help => ("HELP", false),
             Mode::Form => ("ACCOUNT", true),
             Mode::Compose => ("COMPOSE", true),
+            Mode::Confirm => ("CONFIRM", false),
         };
         self.mode_label.set_text(text);
         if insert {
             self.mode_label.add_css_class("insert");
         } else {
             self.mode_label.remove_css_class("insert");
+        }
+        if mode == Mode::Confirm {
+            self.mode_label.add_css_class("danger");
+        } else {
+            self.mode_label.remove_css_class("danger");
         }
         self.update_hints();
     }
@@ -906,6 +972,7 @@ impl App {
             (Mode::Search, _) => &[("Enter", "search server"), ("Esc", "back")],
             (Mode::Palette, _) => &[("↑↓", "move"), ("Enter", "run"), ("Esc", "close")],
             (Mode::Help, _) => &[("Esc", "close")],
+            (Mode::Confirm, _) => &[("Enter y", "yes"), ("Esc n", "no")],
             (Mode::Form, _) if self.form.offers_browser() => {
                 &[("Tab", "next"), ("Ctrl+O", "browser sign-in"), ("Ctrl+T", "test"), ("Ctrl+Enter", "test & add"), ("Esc", "cancel")]
             }
@@ -1793,7 +1860,7 @@ impl App {
     }
 
     pub fn show_overlay(&self, which: &gtk::Widget) {
-        for w in [self.pal.root.upcast_ref::<gtk::Widget>(), self.help.upcast_ref(), self.form.root.upcast_ref()] {
+        for w in [self.pal.root.upcast_ref::<gtk::Widget>(), self.confirm.root.upcast_ref(), self.help.upcast_ref(), self.form.root.upcast_ref()] {
             w.set_visible(w == which);
         }
         self.overlay_scrim.set_visible(true);
