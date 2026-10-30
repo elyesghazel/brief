@@ -348,6 +348,8 @@ jobs:
           pattern: brief-*
           path: dl
       - name: assemble
+        env:
+          BRIEF_UPDATE_KEY: ${{ secrets.BRIEF_UPDATE_KEY }}
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           if [[ $GITHUB_REF == refs/tags/* && $GITHUB_REF_NAME != "v$version" ]]; then
@@ -360,6 +362,13 @@ jobs:
           (cd dl && zip -qr9 "../release/brief-$version-windows-x86_64-portable.zip" brief)
           cp "dl/brief-linux-x86_64/brief-$version-linux-x86_64.tar.gz" release/
           (cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+          # brief only installs what this signature covers; dry runs from forks have no key
+          if [[ -n $BRIEF_UPDATE_KEY ]]; then
+            openssl pkeyutl -sign -inkey <(printf '%s' "$BRIEF_UPDATE_KEY") -rawin -in release/SHA256SUMS -out release/SHA256SUMS.sig
+          elif [[ $GITHUB_REF == refs/tags/* ]]; then
+            echo "::error::no BRIEF_UPDATE_KEY"
+            exit 1
+          fi
 
           prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
           {
@@ -393,3 +402,49 @@ jobs:
           path: |
             release
             notes.md
+
+  # the published files through a real install: brief downloads them, checks the signature and
+  # replaces itself, as it will for users of this release
+  update-linux:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-4-1 libwebkitgtk-6.0-4
+      - run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern '*-linux-x86_64.tar.gz'
+          tar -xzf brief-*.tar.gz
+          mkdir -p ~/.local/bin
+          cp brief-*/bin/brief ~/.local/bin/
+          ~/.local/bin/brief update --force
+          test -f ~/.cache/brief/update/brief.previous
+          test "$(~/.local/bin/brief --version)" = "brief ${GITHUB_REF_NAME#v}"
+
+  update-windows:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          gh release download $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --pattern '*-setup-x86_64.exe'
+          $setup = (Get-Item brief-*-setup-x86_64.exe).FullName
+          Start-Process $setup -Wait -ArgumentList "/VERYSILENT", "/CURRENTUSER", "/SUPPRESSMSGBOXES", "/NORESTART"
+          $dir = "$env:LOCALAPPDATA\Programs\brief"
+          # the installer clears share\ on an upgrade, so this going away proves it ran
+          $marker = "$dir\share\marker"
+          Set-Content $marker "old"
+          & "$dir\brief.exe" update --force --restart | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "brief update failed" }
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          while (-not ((-not (Test-Path $marker)) -and (Get-Process brief -ErrorAction SilentlyContinue)) -and $sw.ElapsedMilliseconds -lt 120000) { Start-Sleep -Seconds 1 }
+          if (Test-Path $marker) { throw "the installer did not run" }
+          if (-not (Get-Process brief -ErrorAction SilentlyContinue)) { throw "brief did not start again" }
+          $v = (Get-Item "$dir\brief.exe").VersionInfo.ProductVersion
+          if ("v$v" -ne $env:GITHUB_REF_NAME) { throw "installed $v" }
+          Write-Host "updated in place to $v and restarted after $($sw.ElapsedMilliseconds) ms"
