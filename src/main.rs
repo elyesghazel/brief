@@ -18,6 +18,7 @@ mod store;
 mod theme;
 mod thread;
 mod ui;
+mod update;
 
 use gtk::prelude::*;
 
@@ -29,6 +30,7 @@ usage:
   brief sync       sync every account once without a window and print what changed
   brief login ACC  browser sign-in for an account with auth = \"oauth2\"
   brief themes     list themes
+  brief update     install the newest release
   brief --version
 
 in the app: ? shows every key, Ctrl+K every command";
@@ -57,6 +59,18 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::SUCCESS;
         }
         Some("sync") => return headless_sync(),
+        Some("update") => {
+            return match update::run_cli(args.iter().any(|a| a == "--force"), args.iter().any(|a| a == "--restart")) {
+                Ok(text) => {
+                    println!("{text}");
+                    glib::ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("brief: {e}");
+                    glib::ExitCode::FAILURE
+                }
+            };
+        }
         Some("login") if args.len() == 2 => return login(&args[1]),
         Some("cat") if args.len() == 2 => {
             // debug: print a .eml the way the reader shows it
@@ -90,6 +104,7 @@ fn main() -> glib::ExitCode {
         .build();
     app.connect_startup(|_| gtk::Window::set_default_icon_name("ch.elyesghazel.brief"));
     app.connect_activate(|app| ui::activate(app, None));
+    app.connect_shutdown(|_| update::on_quit());
     app.connect_command_line(|app, cmd| {
         let url = cmd.arguments().iter().skip(1).map(|a| a.to_string_lossy().into_owned()).find(|a| mailto::is_mailto(a));
         ui::activate(app, url.as_deref());

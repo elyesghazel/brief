@@ -10,7 +10,7 @@ use super::{App, Mode, human_size, label, open_uri, web, widgets};
 use crate::config::{self, Account, Security};
 use crate::oauth::Provider;
 use crate::store::{self, Store, View};
-use crate::theme;
+use crate::{theme, update};
 use gtk::prelude::*;
 use gtk::{glib, graphene};
 use std::cell::{Cell, RefCell};
@@ -30,8 +30,6 @@ const SECTIONS: [(&str, &str); 7] = [
 const ACCOUNTS: usize = 3;
 const ABOUT: usize = 6;
 const REPO: &str = "https://github.com/elyesghazel/brief";
-const RELEASES: &str = "https://github.com/elyesghazel/brief/releases";
-const LATEST_API: &str = "https://api.github.com/repos/elyesghazel/brief/releases/latest";
 
 type Act = Rc<dyn Fn(&Rc<App>)>;
 type Step = Rc<dyn Fn(&Rc<App>, i32)>;
@@ -76,7 +74,10 @@ enum Update {
     Idle,
     Checking,
     Latest(String),
-    Newer(String, String),
+    Newer(update::Release),
+    Downloading(String),
+    /// Verified, goes in on the next quit or restart.
+    Ready(String),
     Failed(String),
 }
 
@@ -696,30 +697,6 @@ fn minutes(v: &str) -> String {
         Ok(m) if m >= 60 && m % 60 == 0 => format!("{} h", m / 60),
         _ => format!("{v} min"),
     }
-}
-
-/// "v0.2.0" is newer than "0.1.0".
-fn newer(tag: &str, current: &str) -> bool {
-    let parse = |s: &str| -> Vec<u64> {
-        s.trim().trim_start_matches(['v', 'V']).split(['.', '-', '+']).take(3).map(|p| p.parse().unwrap_or(0)).collect()
-    };
-    parse(tag) > parse(current)
-}
-
-/// The newest release's tag and page.
-fn latest_release() -> Result<(String, String), String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).build().into();
-    let mut resp = agent
-        .get(LATEST_API)
-        .header("User-Agent", concat!("brief/", env!("CARGO_PKG_VERSION"), " (update check)"))
-        .header("Accept", "application/vnd.github+json")
-        .call()
-        .map_err(|e| e.to_string())?;
-    let body = resp.body_mut().with_config().limit(1 << 20).read_to_string().map_err(|e| e.to_string())?;
-    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    let tag = v.get("tag_name").and_then(|t| t.as_str()).ok_or("no release found")?.to_owned();
-    let url = v.get("html_url").and_then(|t| t.as_str()).unwrap_or(RELEASES).to_owned();
-    Ok((tag, url))
 }
 
 /// Applies a written account field to the account in memory.
@@ -1420,24 +1397,41 @@ impl App {
         p.group("Updates");
         let state = self.settings.update.borrow().clone();
         match state {
-            Update::Newer(tag, url) => p.button(
-                &format!("brief {} is available", tag.trim_start_matches('v')),
-                &format!("You have {}.", env!("CARGO_PKG_VERSION")),
-                "ok",
-                "Download",
-                "primary",
-                move |_| open_uri(&url),
-            ),
+            Update::Newer(rel) => {
+                let title = format!("brief {} is available", rel.version());
+                let desc = format!("You have {}.", update::CURRENT);
+                if update::can_install(&rel) {
+                    p.button(&title, &desc, "ok", "Install", "primary", move |a| a.update_fetch(rel.clone()));
+                } else {
+                    p.button(&title, &desc, "ok", "Download", "primary", move |_| open_uri(&rel.url));
+                }
+            }
+            Update::Downloading(version) => p.info(&format!("Downloading brief {version}"), "Checks its signature, then it is ready to install.", ""),
+            Update::Ready(version) => {
+                let desc = if self.cfg.borrow().updates { "Goes in when you close brief, or restart now." } else { "Restart brief to install it." };
+                p.button(&format!("brief {version} is ready"), desc, "ok", "Restart", "primary", |a| a.update_restart());
+            }
             other => {
                 let (desc, class) = match other {
                     Update::Checking => ("Asking GitHub…".to_owned(), ""),
                     Update::Latest(tag) => (format!("{} is the newest release.", tag.trim_start_matches('v')), "ok"),
-                    Update::Failed(e) => (format!("Could not check: {e}"), "error"),
-                    _ => ("Asks GitHub for the newest release, only when you press it.".to_owned(), ""),
+                    Update::Failed(e) => (format!("Could not update: {e}"), "error"),
+                    _ => ("Asks GitHub for the newest release.".to_owned(), ""),
                 };
-                p.button("Check for updates", &desc, class, "Check", "", |a| a.settings_check_update());
+                p.button("Check for updates", &desc, class, "Check", "", |a| a.update_check(false));
             }
         }
+        p.toggle(
+            "Update automatically",
+            "Asks GitHub once a day, downloads a new version in the background and installs it when you close brief.",
+            self.cfg.borrow().updates,
+            |a, on| {
+                a.cfg.borrow_mut().updates = on;
+                update::set_auto(on);
+                a.settings_save("updates", on);
+                a.settings_refresh();
+            },
+        );
         p.group("Files");
         let files = [
             ("Config file", config::path(), "Every setting, in plain TOML. brief edits single lines and keeps your comments."),
@@ -1465,7 +1459,7 @@ impl App {
         p.group("Links");
         for (title, desc, url) in [
             ("Source code", "github.com/elyesghazel/brief", REPO.to_owned()),
-            ("Releases", "Every version with its changes and downloads.", RELEASES.to_owned()),
+            ("Releases", "Every version with its changes and downloads.", update::RELEASES.to_owned()),
             ("Report a problem", "Or ask for something. The log file helps.", format!("{REPO}/issues")),
         ] {
             p.link(title, desc, None, "", move |_| open_uri(&url));
@@ -1663,30 +1657,86 @@ impl App {
         }
     }
 
-    fn settings_check_update(self: &Rc<Self>) {
-        if *self.settings.update.borrow() == Update::Checking {
+    /// Looks for a release; `background` also downloads it and stays quiet about failures.
+    pub fn update_check(self: &Rc<Self>, background: bool) {
+        let before = self.settings.update.borrow().clone();
+        if matches!(before, Update::Checking | Update::Downloading(_) | Update::Ready(_)) {
             return;
         }
         self.settings.update.replace(Update::Checking);
         self.settings_refresh();
         let (tx, rx) = async_channel::bounded(1);
         std::thread::spawn(move || {
-            let _ = tx.send_blocking(latest_release());
+            if background {
+                update::clean();
+            }
+            let _ = tx.send_blocking(update::latest());
         });
         let app = self.clone();
         glib::spawn_future_local(async move {
             let Ok(r) = rx.recv().await else { return };
             let state = match r {
-                Ok((tag, url)) if newer(&tag, env!("CARGO_PKG_VERSION")) => Update::Newer(tag, url),
-                Ok((tag, _)) => Update::Latest(tag),
+                Ok(rel) if update::newer(&rel.tag, update::CURRENT) => {
+                    if background && update::can_install(&rel) {
+                        return app.update_fetch(rel);
+                    }
+                    app.update_note.set_text(&format!("brief {} available", rel.version()));
+                    Update::Newer(rel)
+                }
+                Ok(rel) => Update::Latest(rel.tag),
                 Err(e) => {
                     crate::log::warn(&format!("update check: {e}"));
+                    if background { before } else { Update::Failed(e) }
+                }
+            };
+            app.settings.update.replace(state);
+            app.settings_refresh();
+        });
+    }
+
+    fn update_fetch(self: &Rc<Self>, rel: update::Release) {
+        let version = rel.version().to_owned();
+        self.settings.update.replace(Update::Downloading(version.clone()));
+        self.settings_refresh();
+        let (tx, rx) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = tx.send_blocking(update::fetch(&rel));
+        });
+        let app = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(r) = rx.recv().await else { return };
+            let state = match r {
+                Ok(ready) => {
+                    update::hold(ready);
+                    app.update_note.set_text(&format!("brief {version} ready"));
+                    Update::Ready(version)
+                }
+                Err(e) => {
+                    crate::log::warn(&format!("update: {e}"));
                     Update::Failed(e)
                 }
             };
             app.settings.update.replace(state);
             app.settings_refresh();
         });
+    }
+
+    fn update_restart(self: &Rc<Self>) {
+        if self.stack.visible_child_name().as_deref() == Some("compose") {
+            return self.toast("close the composer first", true);
+        }
+        update::restart_on_quit();
+        self.win.close();
+    }
+
+    /// From the command list: restarts into a ready update, else shows it in About.
+    pub fn update_now(self: &Rc<Self>) {
+        if matches!(*self.settings.update.borrow(), Update::Ready(_)) {
+            return self.update_restart();
+        }
+        self.open_settings();
+        self.settings_go(ABOUT);
+        self.update_check(false);
     }
 
     // ── keys and pointer ─────────────────────────────────────
@@ -1952,16 +2002,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn versions_compare() {
-        assert!(newer("v0.2.0", "0.1.0"));
-        assert!(newer("0.1.10", "0.1.9"));
-        assert!(newer("v1.0.0", "0.9.9"));
-        assert!(!newer("v0.1.0", "0.1.0"));
-        assert!(!newer("0.0.9", "0.1.0"));
-        assert!(!newer("garbage", "0.1.0"));
-    }
 
     #[test]
     fn written_fields_apply() {

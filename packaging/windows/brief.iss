@@ -96,8 +96,15 @@ Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueNa
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,brief}"; Flags: nowait postinstall skipifsilent
+; brief updating itself asks for this
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: Relaunch
 
 [Code]
+function Relaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
+
 function RegRoot: Integer;
 begin
   if IsAdminInstallMode then Result := HKLM else Result := HKCU;

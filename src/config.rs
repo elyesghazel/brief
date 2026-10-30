@@ -46,6 +46,8 @@ pub struct Config {
     pub toolbar: bool,
     /// How long an open message waits before it counts as read, in milliseconds; -1 = never.
     pub mark_read_ms: i64,
+    /// Look for new versions once a day and install them when brief closes.
+    pub updates: bool,
     #[serde(rename = "account")]
     pub accounts: Vec<Account>,
     /// OAuth app per provider (`[oauth.google]`, `[oauth.microsoft]`), shared by its accounts.
@@ -69,6 +71,7 @@ impl Default for Config {
             compose: "rich".into(),
             toolbar: true,
             mark_read_ms: 700,
+            updates: true,
             accounts: Vec::new(),
             oauth: HashMap::new(),
         }
@@ -281,6 +284,7 @@ theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # compose = "rich"        # "plain" starts the composer without formatting; Ctrl+Shift+M switches
 # toolbar = true           # formatting bar in the composer; Ctrl+Shift+F hides it
 # mark_read_ms = 700       # an open message counts as read after this long; -1 = never
+# updates = true           # look for new versions once a day, install them when brief closes
 
 # Add accounts with `A` in the app, or by hand:
 #

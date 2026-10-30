@@ -116,6 +116,8 @@ pub struct App {
     mode_label: gtk::Label,
     hints: gtk::Box,
     toast: gtk::Label,
+    /// A new version, for as long as there is one.
+    update_note: gtk::Label,
     toast_gen: Rc<Cell<u32>>,
 
     pub focus: Cell<Pane>,
@@ -451,6 +453,8 @@ fn build(app: &gtk::Application) -> Rc<App> {
     toast.set_xalign(1.0);
     toast.set_ellipsize(gtk::pango::EllipsizeMode::Start);
     statusbar.append(&toast);
+    let update_note = label("", "update-note");
+    statusbar.append(&update_note);
 
     let main = gtk::Box::new(gtk::Orientation::Vertical, 0);
     main.append(&topbar);
@@ -537,6 +541,7 @@ fn build(app: &gtk::Application) -> Rc<App> {
         mode_label,
         hints,
         toast,
+        update_note,
         toast_gen: Rc::new(Cell::new(0)),
         focus: Cell::new(Pane::List),
         mode: Cell::new(Mode::Normal),
@@ -676,6 +681,22 @@ impl App {
                 && let Some(app) = me.upgrade() {
                     app.update_title();
                 }
+        });
+
+        // a moment after startup, then once a day
+        crate::update::set_auto(self.cfg.borrow().updates);
+        let me = Rc::downgrade(self);
+        let check = move || {
+            let Some(app) = me.upgrade() else { return glib::ControlFlow::Break };
+            if app.cfg.borrow().updates {
+                app.update_check(true);
+            }
+            glib::ControlFlow::Continue
+        };
+        let daily = check.clone();
+        glib::timeout_add_local_once(Duration::from_secs(5), move || {
+            check();
+            glib::timeout_add_local(Duration::from_secs(24 * 60 * 60), daily);
         });
     }
 

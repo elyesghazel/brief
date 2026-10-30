@@ -90,7 +90,7 @@ bind = $mod SHIFT, M, exec, brief
 for your user only, no admin needed, into `%LOCALAPPDATA%\Programs\brief` (choose "all users"
 in the first dialog for Program Files). It adds a Start menu entry, optionally a desktop shortcut,
 and optionally offers brief for `mailto:` links: tick it, then pick brief under Settings > Apps >
-Default apps > brief. To update, run the newer installer over the old one. Uninstall from
+Default apps > brief. brief updates itself; the portable zip does not. Uninstall from
 Settings > Apps; it asks whether to delete your settings and mail cache and keeps them unless
 you say yes. The builds are not code-signed, so SmartScreen may warn the first time: **More
 info**, then **Run anyway**. Silent install: `brief-<version>-setup-x86_64.exe /VERYSILENT /CURRENTUSER`.
@@ -193,7 +193,7 @@ and order; if a hand-edited file is too unusual to change safely, it says so and
 `j` `k` move, `Tab` (or `1`-`7`) switches section, `Enter` toggles or edits, `h` `l` change a
 choice, `/` finds a setting, `Esc` goes back. Accounts: rename (the offline mail moves along),
 your name, color, signature, servers with a **Test**, sign in again, remove. About has the
-config, cache and log paths and a **Check for updates** that only asks GitHub when you press it.
+config, cache and log paths and **updates**: once a day brief asks GitHub for a new version, downloads it, checks its signature and installs it when you close the window. Turn that off under About or with `updates = false`; `brief update` does the same from a terminal. Installs from the Windows setup and the Linux tarball update themselves, the portable zip and packages only show that a release exists.
 
 Warnings and errors also go to `brief.log` in the cache folder (rotated at ~1 MB, never
 passwords or tokens), handy when brief runs from a launcher.
@@ -275,6 +275,7 @@ Your own: `~/.config/brief/themes/<name>.css` with `@define-color` lines for
 | `compose` | `"rich"` | `"plain"` starts the composer without formatting |
 | `toolbar` | `true` | formatting bar in the composer |
 | `mark_read_ms` | `700` | an open message counts as read after this long; `-1` = never |
+| `updates` | `true` | look for new versions once a day, install them when brief closes |
 | `threads` | `true` | one row per conversation, your Sent replies included; `Ctrl+K` toggles it |
 
 ## CLI

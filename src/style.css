@@ -214,6 +214,7 @@ textview.body { padding: 18px 28px 30px; font-size: 1.04em; }
 .desc      { color: @faint; margin-right: 16px; }
 .toast     { color: @fg; }
 .toast.error { color: @red; }
+.update-note { color: @accent; margin-left: 12px; }
 
 /* ── overlays ─────────────────────────── */
 .scrim { background: alpha(black, 0.45); }

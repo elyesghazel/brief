@@ -357,6 +357,7 @@ impl App {
             item("All inboxes", "0", |a| a.open_view(View::Unified)),
             item("Keyboard shortcuts", "?", |a| a.show_help()),
             item("Edit draft / edit as new", "E", |a| a.compose_edit()),
+            item("Update brief", "", |a| a.update_now()),
             item("Quit", "q", |a| a.win.close()),
         ]);
         // signed-out accounts first, so Ctrl+K Enter fixes them
