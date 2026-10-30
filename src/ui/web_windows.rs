@@ -21,6 +21,7 @@ use webview2_com::{
     NewWindowRequestedEventHandler, WebResourceRequestedEventHandler, take_pwstr,
 };
 use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -67,6 +68,8 @@ struct Inner {
     zoom: Cell<f64>,
     /// Bounds in device pixels while shown.
     shown: Cell<Option<(i32, i32, i32, i32)>>,
+    /// A repaint of the window after the view moved is on its way.
+    repaint: Cell<bool>,
     focused: Cell<bool>,
     /// A context menu is open in the view.
     menu: Cell<bool>,
@@ -92,6 +95,7 @@ impl Html {
             loads: Cell::new(0),
             zoom: Cell::new(1.0),
             shown: Cell::new(None),
+            repaint: Cell::new(false),
             focused: Cell::new(false),
             menu: Cell::new(false),
             on_link: RefCell::new(Rc::new(|uri: &str| open_uri(uri))),
@@ -596,7 +600,7 @@ fn sync_weak(weak: &Weak<Inner>) {
 }
 
 /// Moves the view over the placeholder, or hides it; touches WebView2 only on a change.
-fn sync(me: &Inner) {
+fn sync(me: &Rc<Inner>) {
     let Some(v) = view(me) else { return };
     let place = place(&me.slot);
     if place == me.shown.get() {
@@ -615,6 +619,29 @@ fn sync(me: &Inner) {
             }
         }
     }
+    repaint(me, &v);
+}
+
+/// Redraws the whole window, in Windows' terms so GTK takes it as damage. GTK does not know the
+/// view moved and would leave the pixels of its old place on screen until the next resize. Again
+/// a moment later, as the view can land after this frame.
+fn repaint(me: &Rc<Inner>, v: &View) {
+    unsafe {
+        let _ = InvalidateRect(Some(v.parent), None, false);
+    }
+    if me.repaint.replace(true) {
+        return;
+    }
+    let weak = Rc::downgrade(me);
+    let parent = v.parent;
+    glib::timeout_add_local_once(Duration::from_millis(80), move || {
+        if let Some(me) = weak.upgrade() {
+            me.repaint.set(false);
+            unsafe {
+                let _ = InvalidateRect(Some(parent), None, false);
+            }
+        }
+    });
 }
 
 /// The placeholder's rectangle in device pixels of the toplevel, None while it is not on screen
