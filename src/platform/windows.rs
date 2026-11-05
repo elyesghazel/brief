@@ -101,9 +101,20 @@ fn apple_emoji() {
     if std::fs::read_to_string(&path).ok().as_deref() != Some(conf.as_str()) && std::fs::write(&path, &conf).is_err() {
         return;
     }
+    set_env("FONTCONFIG_FILE", &path.to_string_lossy());
+    set_env("PANGOCAIRO_BACKEND", "fc");
+}
+
+unsafe extern "C" {
+    fn _wputenv_s(name: *const u16, value: *const u16) -> i32;
+}
+
+/// Sets a variable for Windows and for the C runtime: Pango and fontconfig read it with
+/// `getenv`, which only sees the CRT's own copy taken at startup.
+fn set_env(name: &str, value: &str) {
     unsafe {
-        std::env::set_var("FONTCONFIG_FILE", &path);
-        std::env::set_var("PANGOCAIRO_BACKEND", "fc");
+        std::env::set_var(name, value);
+        _wputenv_s(wide(name).as_ptr(), wide(value).as_ptr());
     }
 }
 
