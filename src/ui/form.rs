@@ -635,6 +635,7 @@ impl Form {
             oauth: OAuth::default(),
             signature: String::new(),
             color: COLORS[self.color_idx.get()].to_owned(),
+            notify: true,
         };
         // only the provider goes into config.toml, the client comes from [oauth.<provider>] or
         // the built-in app

@@ -107,6 +107,13 @@ pub struct Account {
     /// Dot in the unified inbox and the sidebar, e.g. "#f9e2af". Empty = accent.
     #[serde(default)]
     pub color: String,
+    /// New-mail notifications for this account; the global `notify` still mutes them all.
+    #[serde(default = "yes")]
+    pub notify: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -245,6 +252,9 @@ impl Account {
         if !self.color.is_empty() {
             out += &format!("color = {}\n", q(&self.color));
         }
+        if !self.notify {
+            out += "notify = false\n";
+        }
         if self.is_oauth() {
             out += "auth = \"oauth2\"\n";
             let o = &self.oauth;
@@ -278,7 +288,7 @@ theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # favicons = "duckduckgo"  # sender icons: "duckduckgo", "direct" (sharper) or "off"
 # sync_minutes = 5        # full sync interval, the inbox is pushed via IDLE anyway
 # cache_limit = 1000      # newest messages kept offline per folder
-# notify = true
+# notify = true           # new-mail notifications; false mutes every account
 # decorations = false    # title bar, on by default on Windows
 # editor = "kitty -e nvim" # Ctrl+E in the composer
 # compose = "rich"        # "plain" starts the composer without formatting; Ctrl+Shift+M switches
@@ -297,6 +307,7 @@ theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # password_cmd = "secret-tool lookup service brief account me@example.com"
 # signature = "-- \nMe"
 # color = "#f9e2af"
+# notify = false           # no new-mail notifications for this account
 #
 # Gmail / Outlook sign in through the browser (the form does it, or `brief login <name>`).
 # Builds without brief's own OAuth apps need your client id:
@@ -562,12 +573,18 @@ mod tests {
             oauth: OAuth::default(),
             signature: String::new(),
             color: String::new(),
+            notify: true,
         };
         let cfg: Config = toml::from_str(&acc.to_toml()).unwrap();
         assert_eq!(cfg.accounts[0].name, "Gmail \"x\"");
         assert_eq!(cfg.accounts[0].smtp.port, 465);
         assert_eq!(cfg.accounts[0].password_cmd, "pass mail/gmail");
         assert_eq!(cfg.accounts[0].auth, Auth::Password);
+        assert!(cfg.accounts[0].notify);
+        assert!(!acc.to_toml().contains("notify"));
+        let muted = Account { notify: false, ..acc };
+        let cfg: Config = toml::from_str(&muted.to_toml()).unwrap();
+        assert!(!cfg.accounts[0].notify);
     }
 
     #[test]
@@ -586,6 +603,7 @@ mod tests {
             oauth: OAuth { provider: "microsoft".into(), client_id: "abc".into(), ..Default::default() },
             signature: String::new(),
             color: String::new(),
+            notify: true,
         };
         let toml = acc.to_toml();
         assert!(toml.contains("oauth = { provider = \"microsoft\", client_id = \"abc\" }"));
@@ -651,6 +669,7 @@ smtp = { host = "mail.example.com", port = 587 }
             oauth: OAuth::default(),
             signature: String::new(),
             color: String::new(),
+            notify: true,
         };
         let builtin = crate::oauth::Provider::Microsoft.defaults();
         // nothing configured: the built-in app
@@ -745,6 +764,7 @@ smtp = { host = "smtp.x.ch", port = 465 }
             password: String::new(),
             signature: String::new(),
             color: String::new(),
+            notify: true,
             auth: Auth::Password,
             oauth: OAuth::default(),
         };
@@ -777,5 +797,10 @@ smtp = { host = "smtp.x.ch", port = 465 }
         let out = edit::edit(&out, Scope::Top, &["theme"], Some(&toml::Value::String("eg".into()))).unwrap();
         assert!(out.contains("\ntheme = \"eg\"              # Ctrl+T to pick;"));
         assert_eq!(out.lines().count(), TEMPLATE.lines().count());
+        // the top-level example, not the one in the account example
+        let out = edit::edit(TEMPLATE, Scope::Top, &["notify"], Some(&toml::Value::Boolean(false))).unwrap();
+        assert!(out.contains("\nnotify = false            # new-mail notifications;"), "{out}");
+        assert!(out.contains("\n# notify = false           # no new-mail notifications for this account"));
+        assert!(!toml::from_str::<Config>(&out).unwrap().notify);
     }
 }

@@ -406,6 +406,11 @@ impl<'a> Page<'a> {
     }
 
     fn toggle(&mut self, title: &str, desc: &str, on: bool, set: impl Fn(&Rc<App>, bool) + 'static) {
+        self.toggle_if(true, title, desc, on, set);
+    }
+
+    /// A toggle that is greyed out and does nothing unless `enabled`.
+    fn toggle_if(&mut self, enabled: bool, title: &str, desc: &str, on: bool, set: impl Fn(&Rc<App>, bool) + 'static) {
         if !self.hit(title, desc) {
             return;
         }
@@ -422,7 +427,10 @@ impl<'a> Page<'a> {
         });
         let flip = sw.clone();
         let activate: Act = Rc::new(move |_| flip.set_active(!flip.is_active()));
-        self.push(Spec { title, desc, control: Some(sw.upcast()), hint: Hint::Toggle, activate: Some(activate), ..Default::default() });
+        self.push(Spec { title, desc, control: Some(sw.upcast()), hint: Hint::Toggle, activate: enabled.then_some(activate), ..Default::default() });
+        if !enabled && let Some(r) = self.rows.last() {
+            r.widget.set_sensitive(false);
+        }
     }
 
     /// A segmented choice; `options` are (label, value).
@@ -706,6 +714,7 @@ fn apply_field(acc: &mut Account, path: &[&str], value: Option<&toml::Value>) {
         ["display_name"] => acc.display_name = text,
         ["signature"] => acc.signature = text,
         ["color"] => acc.color = text,
+        ["notify"] => acc.notify = value.and_then(|v| v.as_bool()).unwrap_or(true),
         ["user"] => acc.user = text,
         ["password_cmd"] => acc.password_cmd = text,
         ["password"] => acc.password = text,
@@ -1365,7 +1374,20 @@ impl App {
         p.toggle("New mail", "A desktop notification for new inbox mail while brief is in the background.", cfg.notify, |a, on| {
             a.cfg.borrow_mut().notify = on;
             a.settings_save("notify", on);
+            // the per-account rows follow
+            a.settings_refresh();
         });
+        let accounts = self.accounts.borrow().clone();
+        for acc in accounts {
+            let name = acc.name.clone();
+            p.toggle_if(cfg.notify, &acc.name, "New-mail notifications for this account. Off mutes just this one.", acc.notify, move |a, on| {
+                // on is the default: drop the key instead of writing it
+                let value = (!on).then_some(toml::Value::Boolean(false));
+                if let Err(e) = a.settings_account_set(&name, &["notify"], value, false) {
+                    a.toast(&format!("{e} (applies until restart)"), true);
+                }
+            });
+        }
         p.group("Offline cache");
         let dir = store::path().parent().map(|d| d.display().to_string()).unwrap_or_default();
         p.info("Size on disk", &dir, &human_size(store::disk_size() as usize));
@@ -2019,6 +2041,7 @@ mod tests {
             oauth: config::OAuth::default(),
             signature: String::new(),
             color: String::new(),
+            notify: true,
         };
         apply_field(&mut acc, &["imap", "port"], Some(&toml::Value::Integer(143)));
         apply_field(&mut acc, &["imap", "security"], Some(&toml::Value::String("starttls".into())));
@@ -2027,5 +2050,9 @@ mod tests {
         assert_eq!((acc.imap.port, acc.imap.security), (143, Security::Starttls));
         assert_eq!(acc.signature, "-- \nMe");
         assert_eq!(text_value("  "), None);
+        apply_field(&mut acc, &["notify"], Some(&toml::Value::Boolean(false)));
+        assert!(!acc.notify);
+        apply_field(&mut acc, &["notify"], None);
+        assert!(acc.notify);
     }
 }

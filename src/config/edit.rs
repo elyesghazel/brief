@@ -605,6 +605,20 @@ client_id = "x"
     }
 
     #[test]
+    fn account_notify_mutes_one_account() {
+        let c = cfg(FILE);
+        assert!(!c.notify);
+        assert!(c.accounts.iter().all(|a| a.notify));
+        let out = edit(FILE, Scope::Account("Work [old]"), &["notify"], Some(&Value::Boolean(false))).unwrap();
+        assert!(out.contains("email = \"me@work.ch\"\nnotify = false\n[account.imap]"));
+        let c = cfg(&out);
+        assert!(c.accounts[0].notify && !c.accounts[1].notify);
+        // back on: the key goes, the default applies
+        let back = edit(&out, Scope::Account("Work [old]"), &["notify"], None).unwrap();
+        assert_eq!(back, FILE);
+    }
+
+    #[test]
     fn server_sub_tables() {
         let out = edit(FILE, Scope::Account("Work [old]"), &["imap", "host"], Some(&s("imap2.work.ch"))).unwrap();
         assert!(out.contains("[account.imap]\nhost = \"imap2.work.ch\"  # internal\nport = 993\n"));

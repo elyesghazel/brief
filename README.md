@@ -146,6 +146,7 @@ smtp = { host = "mail.company.ch", port = 587, security = "starttls" }
 password_cmd = "secret-tool lookup service brief account me@company.ch"
 signature = "-- \nMe"
 color = "#f9e2af"
+notify = false   # optional: no new-mail notifications for this account
 ```
 
 `security` is `tls`, `starttls` or `none`. `password_cmd` can be anything that prints the
@@ -192,7 +193,8 @@ and order; if a hand-edited file is too unusual to change safely, it says so and
 
 `j` `k` move, `Tab` (or `1`-`7`) switches section, `Enter` toggles or edits, `h` `l` change a
 choice, `/` finds a setting, `Esc` goes back. Accounts: rename (the offline mail moves along),
-your name, color, signature, servers with a **Test**, sign in again, remove. About has the
+your name, color, signature, servers with a **Test**, sign in again, remove. Sync & notifications has a
+switch per account under Notifications to mute its new mail. About has the
 config, cache and log paths and **updates**: once a day brief asks GitHub for a new version, downloads it, checks its signature and installs it when you close the window. Turn that off under About or with `updates = false`; `brief update` does the same from a terminal. Installs from the Windows setup and the Linux tarball update themselves, the portable zip and packages only show that a release exists.
 
 Warnings and errors also go to `brief.log` in the cache folder (rotated at ~1 MB, never
@@ -269,7 +271,7 @@ Your own: `~/.config/brief/themes/<name>.css` with `@define-color` lines for
 | `favicons` | `"duckduckgo"` | sender icons via DuckDuckGo (the sender sees nothing), `"direct"` from the sender's site, or `"off"` |
 | `sync_minutes` | `5` | full sync interval; the inbox is pushed via IDLE anyway |
 | `cache_limit` | `1000` | newest messages kept offline per folder |
-| `notify` | `true` | desktop notification for new inbox mail |
+| `notify` | `true` | desktop notification for new inbox mail; `false` mutes every account, `notify = false` in an `[[account]]` block mutes just that one |
 | `decorations` | `false` | window title bar |
 | `editor` | `$TERMINAL -e $EDITOR` | for `Ctrl+E`, e.g. `"kitty -e nvim"` |
 | `compose` | `"rich"` | `"plain"` starts the composer without formatting |

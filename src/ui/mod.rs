@@ -951,8 +951,8 @@ impl App {
                 }
             }
             Event::NewMail { acct, from, subject, count } => {
-                let name = self.accounts.borrow().get(acct).map(|a| a.name.clone()).unwrap_or_default();
-                if self.cfg.borrow().notify && !self.win.is_active() {
+                let (name, muted) = self.accounts.borrow().get(acct).map(|a| (a.name.clone(), !a.notify)).unwrap_or_default();
+                if self.cfg.borrow().notify && !muted && !self.win.is_active() {
                     let title = if count > 1 { format!("{count} new · {name}") } else { format!("{from} · {name}") };
                     notify(&title, &subject);
                 }
