@@ -112,6 +112,11 @@ What differs from Linux:
 - `Ctrl+E` opens `editor` from the config, else `%EDITOR%` in a console window, else Notepad.
 - The window has the normal title bar; new-mail notifications are Windows toasts.
 - Starting brief again opens a second window instead of focusing the first.
+- Apple emoji: install `AppleColorEmoji-Linux.ttf` from
+  [apple-emoji-ttf](https://github.com/samuelngs/apple-emoji-ttf/releases) for your user
+  (right-click -> *Install*). brief then draws its text through fontconfig instead of DirectWrite
+  and takes emoji from that font, in the HTML view too; the rest of Windows keeps Segoe UI Emoji.
+  The `-Windows` build of that font replaces Segoe UI Emoji system wide and is not needed.
 
 **Building it yourself.** In an MSYS2 UCRT64 shell:
 `pacman -S mingw-w64-ucrt-x86_64-{gtk4,librsvg,adwaita-icon-theme,pkgconf,gcc,rust,ntldd} zip`,

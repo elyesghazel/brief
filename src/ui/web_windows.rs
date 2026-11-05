@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::{
     AcceleratorKeyPressedEventHandler, ContextMenuRequestedEventHandler, CreateCoreWebView2ControllerCompletedHandler,
-    CreateCoreWebView2EnvironmentCompletedHandler, ExecuteScriptCompletedHandler, FocusChangedEventHandler, LaunchingExternalUriSchemeEventHandler,
+    CreateCoreWebView2EnvironmentCompletedHandler, DOMContentLoadedEventHandler, ExecuteScriptCompletedHandler, FocusChangedEventHandler,
+    LaunchingExternalUriSchemeEventHandler,
     NavigationStartingEventHandler,
     NewWindowRequestedEventHandler, WebResourceRequestedEventHandler, take_pwstr,
 };
@@ -395,6 +396,26 @@ fn setup(me: &Rc<Inner>, env: ICoreWebView2Environment, ctl: ICoreWebView2Contro
             })),
             &mut token,
         )?;
+        // Apple emoji: once the mail is parsed, every element gets the emoji-only face first in
+        // its font list (see `page`); runs with page scripts off
+        if crate::platform::has_apple_emoji()
+            && let Ok(web2) = web.cast::<ICoreWebView2_2>() {
+                let done = ExecuteScriptCompletedHandler::create(Box::new(|r, _| {
+                    if let Err(e) = r {
+                        eprintln!("brief: webview2 emoji script failed: {e}");
+                    }
+                    Ok(())
+                }));
+                web2.add_DOMContentLoaded(
+                    &DOMContentLoadedEventHandler::create(Box::new(move |web, _| {
+                        if let Some(web) = web {
+                            web.ExecuteScript(&HSTRING::from(EMOJI_JS), &done)?;
+                        }
+                        Ok(())
+                    })),
+                    &mut token,
+                )?;
+            }
         // mailto: and other schemes Edge would hand to Windows
         if let Ok(web18) = web.cast::<ICoreWebView2_18>() {
             let weak = Rc::downgrade(me);
@@ -522,13 +543,30 @@ fn clicked(me: &Inner, uri: String, user: BOOL) {
     }
 }
 
-/// The mail with thin scrollbars, closer to the overlay ones WebKitGTK draws.
+/// Apple Color Emoji under its own name, for emoji code points only: put first in a font list it
+/// takes the emoji and leaves letters, digits and spaces to the mail's fonts.
+const EMOJI_FACE: &str = "@font-face{font-family:\"brief-emoji\";src:local(\"Apple Color Emoji\");\
+    unicode-range:U+A9,U+AE,U+203C,U+2049,U+20E3,U+2122,U+2139,U+2194-2199,U+21A9-21AA,U+231A-23FF,U+24C2,\
+    U+25AA-25FE,U+2600-27BF,U+2934-2935,U+2B05-2B55,U+3030,U+303D,U+3297,U+3299,U+200D,U+FE0F,\
+    U+1F000-1FAFF,U+E0020-E007F}";
+
+/// Puts the emoji face in front of every element's computed font list. Inline and !important, so
+/// the mail's own CSS keeps its fonts but cannot take the emoji back to Segoe UI Emoji.
+const EMOJI_JS: &str = "(()=>{const E='\"brief-emoji\"';for(const e of document.querySelectorAll('body,body *')){\
+    const f=getComputedStyle(e).fontFamily;if(f&&!f.startsWith(E))e.style.setProperty('font-family',E+','+f,'important')}})()";
+
+/// The mail with thin scrollbars, closer to the overlay ones WebKitGTK draws, and the Apple emoji
+/// face when brief uses Apple's emoji.
 fn page(html: &str) -> String {
-    const STYLE: &str = "<style>html{scrollbar-width:thin;scrollbar-color:#c4c4c4 transparent}</style>";
+    let mut style = String::from("<style>html{scrollbar-width:thin;scrollbar-color:#c4c4c4 transparent}");
+    if crate::platform::has_apple_emoji() {
+        style.push_str(EMOJI_FACE);
+    }
+    style.push_str("</style>");
     let mut page = html.to_owned();
     // after the policy that prepare_html puts in <head>
     if let Some(at) = page.find("<meta name=\"referrer\"") {
-        page.insert_str(at, STYLE);
+        page.insert_str(at, &style);
     }
     page
 }

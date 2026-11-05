@@ -28,7 +28,84 @@ pub fn attach_console() {
     }
 }
 
-pub fn prepare_gui() {}
+/// Environment for the window, set before GTK starts.
+pub fn prepare_gui() {
+    apple_emoji();
+}
+
+/// The Apple Color Emoji font, when the user installed one (for this user or for all). The
+/// Windows build of that font only replaces Segoe UI Emoji and is left alone.
+fn apple_emoji_font() -> Option<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(d) = dirs::data_local_dir() {
+        dirs.push(d.join("Microsoft").join("Windows").join("Fonts"));
+    }
+    dirs.push(Path::new(&std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into())).join("Fonts"));
+    dirs.iter().find_map(|d| {
+        std::fs::read_dir(d).ok()?.flatten().map(|e| e.path()).find(|p| {
+            let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+            name.starts_with("applecoloremoji") && !name.contains("windows") && (name.ends_with(".ttf") || name.ends_with(".ttc"))
+        })
+    })
+}
+
+/// Whether brief draws emoji with Apple's font (see `apple_emoji`); the HTML view follows.
+pub fn has_apple_emoji() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| apple_emoji_font().is_some())
+}
+
+/// Pango on Windows draws with DirectWrite, which falls back to Segoe UI Emoji whatever else is
+/// installed. With Apple Color Emoji installed, brief switches Pango to fontconfig + FreeType
+/// (both ship with brief) and a private fonts.conf that hides Microsoft's emoji fonts and sends
+/// emoji to Apple's. Nothing outside brief changes. Skipped when PANGOCAIRO_BACKEND or
+/// FONTCONFIG_FILE is already set.
+fn apple_emoji() {
+    if std::env::var_os("PANGOCAIRO_BACKEND").is_some() || std::env::var_os("FONTCONFIG_FILE").is_some() || !has_apple_emoji() {
+        return;
+    }
+    let Some(font) = apple_emoji_font() else { return };
+    let dir = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("brief");
+    let path = dir.join("fonts.conf");
+    let xml = |p: &Path| p.to_string_lossy().replace('\\', "/").replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let font_dir = font.parent().map(xml).unwrap_or_default();
+    let cache = xml(&dir.join("fontconfig"));
+    let conf = format!(
+        r#"<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<!-- written by brief: Windows fonts, emoji from Apple Color Emoji instead of Segoe UI Emoji -->
+<fontconfig>
+  <dir>WINDOWSFONTDIR</dir>
+  <dir>{font_dir}</dir>
+  <cachedir>{cache}</cachedir>
+  <selectfont>
+    <rejectfont>
+      <glob>*seguiemj*</glob>
+      <glob>*seguisym*</glob>
+    </rejectfont>
+  </selectfont>
+  <match target="pattern">
+    <test name="family"><string>Segoe UI Emoji</string></test>
+    <edit name="family" mode="assign" binding="strong"><string>Apple Color Emoji</string></edit>
+  </match>
+  <alias><family>sans-serif</family><prefer><family>Segoe UI</family></prefer></alias>
+  <alias><family>serif</family><prefer><family>Times New Roman</family></prefer></alias>
+  <alias><family>monospace</family><prefer><family>Consolas</family></prefer></alias>
+  <match target="pattern">
+    <edit name="family" mode="append" binding="weak"><string>Apple Color Emoji</string></edit>
+  </match>
+</fontconfig>
+"#
+    );
+    let _ = std::fs::create_dir_all(&dir);
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(conf.as_str()) && std::fs::write(&path, &conf).is_err() {
+        return;
+    }
+    unsafe {
+        std::env::set_var("FONTCONFIG_FILE", &path);
+        std::env::set_var("PANGOCAIRO_BACKEND", "fc");
+    }
+}
 
 /// No single instance: GApplication would need a D-Bus session bus, which Windows lacks.
 pub fn app_flags() -> gtk::gio::ApplicationFlags {
