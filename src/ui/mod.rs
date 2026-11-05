@@ -70,6 +70,7 @@ pub struct App {
     pub workers: RefCell<Vec<imap::Handle>>,
     pub store: RefCell<Store>,
     events: imap::EventTx,
+    base_css: gtk::CssProvider,
     theme_css: gtk::CssProvider,
     font_css: gtk::CssProvider,
     pub theme_name: RefCell<String>,
@@ -86,6 +87,10 @@ pub struct App {
     side_pane: gtk::Box,
     list_pane: gtk::Box,
     reader_pane: gtk::Box,
+    /// Sidebar | rest, and list | reader; their positions follow the zoom.
+    panes: (gtk::Paned, gtk::Paned),
+    /// The zoom the sizes on screen were made for.
+    zoomed: Cell<f64>,
     side: gtk::ListBox,
     side_items: RefCell<Vec<SideItem>>,
     list_model: gio::ListStore,
@@ -290,7 +295,6 @@ fn build(app: &gtk::Application) -> Rc<App> {
 
     let display = gtk::prelude::WidgetExt::display(&win);
     let base = gtk::CssProvider::new();
-    base.load_from_string(include_str!("../style.css"));
     gtk::style_context_add_provider_for_display(&display, &base, gtk::STYLE_PROVIDER_PRIORITY_USER);
     let theme_css = gtk::CssProvider::new();
     gtk::style_context_add_provider_for_display(&display, &theme_css, gtk::STYLE_PROVIDER_PRIORITY_USER + 1);
@@ -351,7 +355,6 @@ fn build(app: &gtk::Application) -> Rc<App> {
     let side_pane = gtk::Box::new(gtk::Orientation::Vertical, 0);
     side_pane.add_css_class("pane");
     side_pane.append(&side_scroll);
-    side_pane.set_size_request(190, -1);
 
     // ── message list
     let list_model = gio::ListStore::new::<glib::BoxedAnyObject>();
@@ -420,7 +423,6 @@ fn build(app: &gtk::Application) -> Rc<App> {
     let list_pane = gtk::Box::new(gtk::Orientation::Vertical, 0);
     list_pane.add_css_class("pane");
     list_pane.append(&list_stack);
-    list_pane.set_size_request(300, -1);
 
     // ── reader
     let rd = reader::Reader::new();
@@ -502,6 +504,7 @@ fn build(app: &gtk::Application) -> Rc<App> {
         workers: RefCell::new(Vec::new()),
         store: RefCell::new(store),
         events: tx,
+        base_css: base,
         theme_css,
         font_css,
         theme_name: RefCell::new(theme_name),
@@ -515,6 +518,8 @@ fn build(app: &gtk::Application) -> Rc<App> {
         side_pane,
         list_pane,
         reader_pane,
+        panes: (outer.clone(), inner.clone()),
+        zoomed: Cell::new(1.0),
         side,
         side_items: RefCell::new(Vec::new()),
         list_model,
@@ -557,6 +562,7 @@ fn build(app: &gtk::Application) -> Rc<App> {
     });
 
     let start_theme = app.theme_name.borrow().clone();
+    app.apply_zoom();
     app.apply_theme(&start_theme);
     app.apply_font();
     app.apply_acct_css();
@@ -1030,7 +1036,7 @@ impl App {
     // ── theme ────────────────────────────────────────────────
 
     pub fn apply_theme(&self, name: &str) {
-        self.theme_css.load_from_string(&theme::css(name));
+        self.theme_css.load_from_string(&theme::scale_px(&theme::css(name), self.cfg.borrow().zoom()));
         *self.theme_name.borrow_mut() = name.to_owned();
         // tags recolor text already in the buffer
         self.setup_tags();
@@ -1052,9 +1058,55 @@ impl App {
         let css = format!(
             "window.brief {{ font-family: {}; font-size: {}pt; }}",
             families.join(", "),
-            cfg.font_size
+            (cfg.font_size * cfg.zoom() * 100.0).round() / 100.0
         );
         self.font_css.load_from_string(&css);
+    }
+
+    /// `n` pixels at the current zoom, for sizes set in code.
+    pub fn px(&self, n: i32) -> i32 {
+        (f64::from(n) * self.cfg.borrow().zoom()).round() as i32
+    }
+
+    /// Ctrl+= (1), Ctrl+- (-1) and Ctrl+0 (0): the whole window one step bigger, smaller, back
+    /// to 100%, saved as `zoom`.
+    pub fn zoom(self: &Rc<Self>, dir: i32) {
+        let before = self.cfg.borrow().zoom();
+        let z = config::zoom_step(before, dir);
+        if (z - before).abs() < 1e-9 {
+            self.toast(&format!("zoom {:.0}%", z * 100.0), false);
+            return;
+        }
+        self.set_zoom(z);
+        self.toast(&format!("zoom {:.0}%  ·  Ctrl+0 resets", z * 100.0), false);
+        self.settings_refresh();
+    }
+
+    /// Applies and saves a zoom (settings, keys).
+    pub fn set_zoom(self: &Rc<Self>, z: f64) {
+        self.cfg.borrow_mut().zoom = z;
+        self.apply_zoom();
+        if let Err(e) = config::set("zoom", z) {
+            self.toast(&format!("{e} (applies until restart)"), true);
+        }
+    }
+
+    /// Scales the stylesheet's lengths, the font and the HTML view to the configured zoom.
+    fn apply_zoom(&self) {
+        let z = self.cfg.borrow().zoom();
+        self.base_css.load_from_string(&theme::scale_px(include_str!("../style.css"), z));
+        let name = self.theme_name.borrow().clone();
+        self.theme_css.load_from_string(&theme::scale_px(&theme::css(&name), z));
+        self.apply_font();
+        self.set_html_zoom(z);
+        self.side_pane.set_size_request(self.px(190), -1);
+        self.list_pane.set_size_request(self.px(300), -1);
+        // the panes keep their share of the window
+        let ratio = z / self.zoomed.replace(z);
+        for p in [&self.panes.0, &self.panes.1] {
+            p.set_position((f64::from(p.position()) * ratio).round() as i32);
+        }
+        self.rebuild_side();
     }
 
     // ── mode and focus ───────────────────────────────────────
@@ -1155,8 +1207,8 @@ impl App {
         let item_row = |icon: &str, name: &str, unseen: u32, depth: usize| {
             let b = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             b.add_css_class("side-item");
-            b.set_margin_start((depth * 16) as i32);
-            b.append(&widgets::emoji(icon, 18));
+            b.set_margin_start(self.px(depth as i32 * 16));
+            b.append(&widgets::emoji(icon, self.px(18)));
             b.append(ellipsize(&label(name, "side-name")));
             if unseen > 0 {
                 let pill = label(&unseen.to_string(), "pill");

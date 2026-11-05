@@ -136,15 +136,14 @@ pub struct Avatar {
 impl Avatar {
     pub fn new(size: i32) -> Avatar {
         let root = gtk::Stack::new();
+        // the size comes from the CSS (.avatar, .avatar-large, .conv-line .avatar), so it zooms
         root.add_css_class("avatar");
-        root.set_size_request(size, size);
         root.set_valign(gtk::Align::Start);
         root.set_halign(gtk::Align::Center);
         root.set_overflow(gtk::Overflow::Hidden);
         let initials = gtk::Label::new(None);
         initials.add_css_class("avatar-initials");
         let image = gtk::Image::new();
-        image.set_pixel_size(size * 2 / 3);
         image.add_css_class("avatar-icon");
         root.add_named(&initials, Some("initials"));
         root.add_named(&image, Some("icon"));

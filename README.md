@@ -219,7 +219,7 @@ passwords or tokens), handy when brief runs from a launcher.
 | `x` `*` | select, select all |
 | `I` | load remote images for this mail |
 | `o` `O` `H` `L` `a` | browser, browser with images, HTML / text, links, attachments |
-| `Ctrl+=` `Ctrl+-` `Ctrl+0` | zoom the HTML view |
+| `Ctrl+=` `Ctrl+-` `Ctrl+0` | zoom the whole window (70% to 150%, HTML view included), back to 100%; keypad `+` `-` too |
 | `Ctrl+R` | fetch new mail on every account |
 | `t` | theme picker with live preview |
 | `,` `Ctrl+,` | settings |
@@ -267,6 +267,7 @@ Your own: `~/.config/brief/themes/<name>.css` with `@define-color` lines for
 |---|---|---|
 | `theme` | `"graphite"` | see above |
 | `font`, `font_size` | Inter, 10.5 | UI font |
+| `zoom` | `1.0` | scale of the whole window, `0.9` = 90%; `Ctrl+-` / `Ctrl+=` set it |
 | `html` | `true` | render HTML mail; `false` shows text |
 | `favicons` | `"duckduckgo"` | sender icons via DuckDuckGo (the sender sees nothing), `"direct"` from the sender's site, or `"off"` |
 | `sync_minutes` | `5` | full sync interval; the inbox is pushed via IDLE anyway |

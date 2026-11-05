@@ -62,9 +62,10 @@ pub fn install(app: &Rc<App>) {
         let Some(app) = me.upgrade() else { return glib::Propagation::Proceed };
         let mut k = name(key, mods);
         // Ctrl+Shift+7/8/9 by position, whatever symbol Shift puts on the digit in this layout
+        // (only those: Ctrl+Shift+1 is Ctrl++ on a Swiss keyboard)
         let ctrl_shift = gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK;
         if mods & (ctrl_shift | gdk::ModifierType::ALT_MASK) == ctrl_shift
-            && let Some(d) = digit(code).or(match k.as_str() {
+            && let Some(d) = digit(code).filter(|d| matches!(d, '7'..='9')).or(match k.as_str() {
                 // no keymap (Broadway): the US symbols
                 "C-S-&" => Some('7'),
                 "C-S-*" => Some('8'),
@@ -82,6 +83,16 @@ pub fn install(app: &Rc<App>) {
     app.win.add_controller(keys);
 }
 
+/// Ctrl+= / Ctrl++ (also Shift and the keypad) zoom in, Ctrl+- out, Ctrl+0 back to 100%.
+pub fn zoom_key(k: &str) -> Option<i32> {
+    match k {
+        "C-=" | "C-+" | "C-S-+" | "C-S-=" | "C-plus" | "C-equal" | "C-KP_Add" => Some(1),
+        "C--" | "C-S-_" | "C-minus" | "C-KP_Subtract" => Some(-1),
+        "C-0" | "C-KP_0" | "C-KP_Insert" => Some(0),
+        _ => None,
+    }
+}
+
 /// Returns true when the key was used.
 pub(super) fn handle(app: &Rc<App>, k: &str) -> bool {
     if matches!(k, "Shift_L" | "Shift_R" | "Control_L" | "Control_R" | "Alt_L" | "Alt_R" | "Super_L" | "Super_R") {
@@ -89,6 +100,11 @@ pub(super) fn handle(app: &Rc<App>, k: &str) -> bool {
     }
     if k == "C-q" {
         app.win.close();
+        return true;
+    }
+    // like a browser, in every mode; the composer has no other use for these
+    if let Some(dir) = zoom_key(k) {
+        app.zoom(dir);
         return true;
     }
     match app.mode.get() {
@@ -221,9 +237,6 @@ fn normal(app: &Rc<App>, k: &str) -> bool {
         }
         ("L", _) => app.open_palette_links(),
         ("I", _) => app.load_remote(false),
-        ("C-plus" | "C-=" | "C-equal", _) => app.zoom(0.1),
-        ("C-minus" | "C--", _) => app.zoom(-0.1),
-        ("C-0", _) => app.zoom(0.0),
         ("a", _) => app.open_palette_attachments(),
         ("Escape", _) => {
             if !app.marked.borrow().is_empty() {

@@ -155,9 +155,59 @@ pub fn css(name: &str) -> String {
     }
 }
 
+/// `css` with every `px` length times `zoom`, for the UI zoom. Lengths are whole pixels, and
+/// hairlines (1px borders) never vanish.
+pub fn scale_px(css: &str, zoom: f64) -> String {
+    if (zoom - 1.0).abs() < 1e-6 {
+        return css.to_owned();
+    }
+    let b = css.as_bytes();
+    let mut out = String::with_capacity(css.len());
+    let mut i = 0;
+    let mut copied = 0;
+    while i < b.len() {
+        let starts_number = b[i].is_ascii_digit() && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'.' || b[i - 1] == b'-' && i >= 2 && b[i - 2].is_ascii_alphanumeric()));
+        if !starts_number {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < b.len() && (b[j].is_ascii_digit() || b[j] == b'.') {
+            j += 1;
+        }
+        let unit = css[j..].starts_with("px") && !css[j + 2..].starts_with(|c: char| c.is_ascii_alphanumeric());
+        match css[i..j].parse::<f64>() {
+            Ok(v) if unit => {
+                let scaled = (v * zoom).round();
+                let scaled = if v > 0.0 && scaled < 1.0 { 1.0 } else { scaled };
+                out += &css[copied..i];
+                out += &format!("{scaled}");
+                copied = j;
+            }
+            _ => {}
+        }
+        i = j;
+    }
+    out += &css[copied..];
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_scales_pixel_lengths_only() {
+        let css = ".a { padding: 10px 12px 10px 4px; border: 1px solid alpha(@ghost, 0.7); font-size: 0.9em; }\n.b { margin: -2px; min-width: 36px; } .c-2px { x: 0px; }";
+        let out = scale_px(css, 0.8);
+        assert_eq!(out, ".a { padding: 8px 10px 8px 3px; border: 1px solid alpha(@ghost, 0.7); font-size: 0.9em; }\n.b { margin: -2px; min-width: 29px; } .c-2px { x: 0px; }");
+        assert_eq!(scale_px(css, 1.0), css);
+        assert!(scale_px(css, 1.5).contains("padding: 15px 18px 15px 6px"));
+        // the shipped stylesheet keeps parsing as the same rules
+        let big = scale_px(include_str!("style.css"), 0.7);
+        assert_eq!(big.matches('{').count(), include_str!("style.css").matches('{').count());
+        assert!(!big.contains("0px solid"));
+    }
 
     #[test]
     fn builtins_define_every_color() {

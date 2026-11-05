@@ -106,6 +106,8 @@ row:selected .pill { background: @accent; color: @bg; }
 .avatar-large { min-width: 42px; min-height: 42px; }
 .avatar-initials { color: white; font-weight: 800; font-size: 0.9em; }
 .avatar-large .avatar-initials { font-size: 1.05em; }
+.avatar-icon { -gtk-icon-size: 24px; }
+.avatar-large .avatar-icon { -gtk-icon-size: 28px; }
 .avatar.avatar-favicon { background: white; box-shadow: inset 0 0 0 1px alpha(black, 0.08); }
 .avatar-c0 { background: linear-gradient(135deg, #7aa2f7, #5a7fe0); }
 .avatar-c1 { background: linear-gradient(135deg, #bb9af7, #9a6ee8); }
@@ -174,6 +176,7 @@ button.tool.on image { color: @yellow; }
 .conv-dot  { color: transparent; font-size: 0.6em; min-width: 12px; }
 .conv-line.unread .conv-dot { color: @accent; }
 .conv-line .avatar { min-width: 24px; min-height: 24px; margin-right: 10px; }
+.conv-line .avatar-icon { -gtk-icon-size: 16px; }
 .conv-line .avatar-initials { font-size: 0.68em; }
 .conv-from { color: @muted; margin-right: 12px; }
 .conv-line.unread .conv-from { color: @fg; font-weight: bold; }

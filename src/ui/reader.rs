@@ -671,11 +671,10 @@ impl App {
         adj.set_value(if bottom { adj.upper() } else { 0.0 });
     }
 
-    pub fn zoom(&self, delta: f64) {
-        let z = if delta == 0.0 { 1.0 } else { (self.rd.zoom.get() + delta).clamp(0.5, 2.5) };
+    /// The HTML view follows the UI zoom.
+    pub(super) fn set_html_zoom(&self, z: f64) {
         self.rd.zoom.set(z);
         self.rd.web.set_zoom(z);
-        self.toast(&format!("zoom {:.0}%", z * 100.0), false);
     }
 
     /// Text tags for plain mail, colored from the theme.

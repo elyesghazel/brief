@@ -951,10 +951,14 @@ impl App {
             a.set_font(&v);
             Ok(())
         });
-        p.number("Size", "Of everything, in points. The HTML view zooms on its own with Ctrl+= and Ctrl+-.", cfg.font_size, (7.0, 20.0, 0.5), "pt", |a, v| {
+        p.number("Size", "Of everything, in points, at 100% zoom.", cfg.font_size, (7.0, 20.0, 0.5), "pt", |a, v| {
             a.cfg.borrow_mut().font_size = v;
             a.apply_font();
             a.settings_save("font_size", v);
+        });
+        let (lo, hi) = ((config::ZOOM_MIN * 100.0).round(), (config::ZOOM_MAX * 100.0).round());
+        p.number("Zoom", "The whole window: text, spacing, the HTML view. Ctrl+- and Ctrl+= step it anywhere, Ctrl+0 resets.", (cfg.zoom() * 100.0).round(), (lo, hi, 10.0), "%", |a, v| {
+            a.set_zoom((v / 10.0).round() / 10.0);
         });
         p.group("Mail");
         if web::BUILT {

@@ -22,6 +22,8 @@ pub struct Config {
     /// CSS font family for everything.
     pub font: String,
     pub font_size: f64,
+    /// Scale of the whole window (text, spacing, the HTML view), 1.0 = 100%. Ctrl+- / Ctrl+= / Ctrl+0.
+    pub zoom: f64,
     /// Full sync of every account, besides IDLE push on the inbox.
     pub sync_minutes: u64,
     /// Newest messages kept per folder.
@@ -60,6 +62,7 @@ impl Default for Config {
             theme: crate::theme::DEFAULT.into(),
             font: crate::platform::FONT.into(),
             font_size: 10.5,
+            zoom: 1.0,
             html: true,
             threads: true,
             favicons: "duckduckgo".into(),
@@ -283,6 +286,7 @@ const TEMPLATE: &str = r##"# brief - config. Restart brief after editing account
 theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # font = "Inter, Noto Sans, sans-serif"   # emoji come from Apple Color Emoji when installed
 # font_size = 10.5
+# zoom = 1.0               # whole window, 0.7 to 1.5; Ctrl+- and Ctrl+= step it, Ctrl+0 resets
 # html = true              # render HTML mail; remote images stay blocked until you press I
 # threads = true           # one row per conversation; Ctrl+K toggles it
 # favicons = "duckduckgo"  # sender icons: "duckduckgo", "direct" (sharper) or "off"
@@ -341,7 +345,25 @@ pub fn load() -> Result<Config, String> {
     Ok(cfg)
 }
 
+/// The steps Ctrl+- and Ctrl+= go through.
+pub const ZOOM_MIN: f64 = 0.7;
+pub const ZOOM_MAX: f64 = 1.5;
+
+/// One 10% step from `zoom` (`dir` -1 or 1) on the 70%..150% grid, or back to 100% for 0.
+pub fn zoom_step(zoom: f64, dir: i32) -> f64 {
+    if dir == 0 {
+        return 1.0;
+    }
+    let tenths = (zoom * 10.0).round() as i32 + dir.signum();
+    (f64::from(tenths) / 10.0).clamp(ZOOM_MIN, ZOOM_MAX)
+}
+
 impl Config {
+    /// The zoom to use: a hand-edited value is kept between 50% and 200%.
+    pub fn zoom(&self) -> f64 {
+        if self.zoom.is_finite() && self.zoom > 0.0 { self.zoom.clamp(0.5, 2.0) } else { 1.0 }
+    }
+
     /// Completes an OAuth account's settings from `[oauth.<provider>]` and the built-in defaults.
     pub fn resolve_oauth(&self, mut acc: Account) -> Account {
         if !acc.is_oauth() {
@@ -779,6 +801,26 @@ smtp = { host = "smtp.x.ch", port = 465 }
         // a multi-line string with a line that looks like a table header
         let tricky = "[[account]]\nname = \"A\"\nemail = \"a@x\"\nsignature = \"\"\"\n[x]\n\"\"\"\n";
         assert!(without_account(tricky, "A").is_none());
+    }
+
+    #[test]
+    fn zoom_parses_and_steps() {
+        assert_eq!(Config::default().zoom(), 1.0);
+        let cfg: Config = toml::from_str("zoom = 0.9\n").unwrap();
+        assert_eq!(cfg.zoom(), 0.9);
+        assert_eq!(toml::from_str::<Config>("zoom = 9.0\n").unwrap().zoom(), 2.0);
+        assert_eq!(toml::from_str::<Config>("zoom = -1.0\n").unwrap().zoom(), 1.0);
+        assert_eq!(zoom_step(1.0, -1), 0.9);
+        assert_eq!(zoom_step(0.9, 1), 1.0);
+        assert_eq!(zoom_step(0.7, -1), 0.7);
+        assert_eq!(zoom_step(1.5, 1), 1.5);
+        assert_eq!(zoom_step(0.85, -1), 0.8);
+        assert_eq!(zoom_step(1.3, 0), 1.0);
+        // stays on the grid, so the file reads 0.8, not 0.8000000000000002
+        assert_eq!(edit::literal(&toml::Value::Float(zoom_step(0.9, -1))), "0.8");
+        let out = edit::edit(TEMPLATE, Scope::Top, &["zoom"], Some(&toml::Value::Float(0.8))).unwrap();
+        assert!(out.contains("\nzoom = 0.8                 # whole window"), "{out}");
+        assert_eq!(toml::from_str::<Config>(&out).unwrap().zoom(), 0.8);
     }
 
     #[test]
