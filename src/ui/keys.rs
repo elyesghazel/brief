@@ -161,8 +161,11 @@ fn normal(app: &Rc<App>, k: &str) -> bool {
 
         // panes
         ("h" | "Left", Pane::List) => app.set_focus(Pane::Side),
+        ("h" | "Left", Pane::Side) => app.side_left(),
+        ("l" | "Right", Pane::Side) => app.side_right(),
+        ("space" | "Return", Pane::Side) if app.side_toggle() => {}
         ("h" | "Left" | "Escape" | "BackSpace", Pane::Reader) => app.set_focus(Pane::List),
-        ("l" | "Right" | "Return", Pane::Side) => app.set_focus(Pane::List),
+        ("Return", Pane::Side) => app.set_focus(Pane::List),
         ("l" | "Right" | "Return", Pane::List) => {
             if app.selected_index().is_none() {
                 app.select_index(0);
@@ -181,8 +184,8 @@ fn normal(app: &Rc<App>, k: &str) -> bool {
         }),
 
         // moving
-        ("j" | "Down", Pane::Side) => app.side_step(1),
-        ("k" | "Up", Pane::Side) => app.side_step(-1),
+        ("j" | "Down", Pane::Side) => app.side_step(1, true),
+        ("k" | "Up", Pane::Side) => app.side_step(-1, true),
         ("j" | "Down", Pane::List) => app.list_step(1),
         ("k" | "Up", Pane::List) => app.list_step(-1),
         ("j" | "Down", Pane::Reader) => app.reader_scroll(0.1),
@@ -199,8 +202,8 @@ fn normal(app: &Rc<App>, k: &str) -> bool {
         ("G" | "End", _) => app.list_step(i64::MAX / 2),
         ("Home", Pane::Reader) => app.reader_top(false),
         ("Home", _) => app.select_index(0),
-        ("]", _) => app.side_step(1),
-        ("[", _) => app.side_step(-1),
+        ("]", _) => app.side_step(1, false),
+        ("[", _) => app.side_step(-1, false),
         ("0", _) => app.open_view(View::Unified),
         (d, _) if d.len() == 1 && d.chars().all(|c| c.is_ascii_digit()) => {
             let i = d.parse::<usize>().unwrap() - 1;

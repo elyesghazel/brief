@@ -211,6 +211,7 @@ passwords or tokens), handy when brief runs from a launcher.
 | `h` `l` `Tab` `Enter` | switch pane, read |
 | `gg` `G` `Ctrl+d` `Ctrl+u` `Space` | jump, half page, page |
 | `0` `1`-`9` `[` `]` | all inboxes, account inbox, previous / next folder |
+| `Space` / `h` `l` (sidebar) | fold an account to its row (its unread count stays) / unfold; a click on the account does the same |
 | `gi` `gs` `gd` `ga` `gt` `gj` | inbox, sent, drafts, archive, trash, spam |
 | `/` | search: words, `from:` `to:` `subject:` `is:unread` `is:starred` `has:attachment`; Enter also searches the server |
 | `c` `r` `R` `f` | compose, reply, reply all, forward |
@@ -267,6 +268,7 @@ Your own: `~/.config/brief/themes/<name>.css` with `@define-color` lines for
 |---|---|---|
 | `theme` | `"graphite"` | see above |
 | `font`, `font_size` | Inter, 10.5 | UI font |
+| `collapsed` | `false` | in an `[[account]]` block: only the account's row in the sidebar; `Space` on it switches |
 | `zoom` | `1.0` | scale of the whole window, `0.9` = 90%; `Ctrl+-` / `Ctrl+=` set it |
 | `html` | `true` | render HTML mail; `false` shows text |
 | `favicons` | `"duckduckgo"` | sender icons via DuckDuckGo (the sender sees nothing), `"direct"` from the sender's site, or `"off"` |

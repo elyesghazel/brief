@@ -49,7 +49,10 @@ pub enum Mode {
 #[derive(Clone, Debug, PartialEq)]
 enum SideItem {
     Unified,
-    Header(usize),
+    /// An account's own row: Space, a click or h / l fold its folders away.
+    Account(usize),
+    /// A status line under an account (signed out, connecting); never selected.
+    Note(usize),
     Folder(usize, String),
 }
 
@@ -1157,7 +1160,7 @@ impl App {
                 &[("Ctrl+Enter", "send"), ("Ctrl+B I U", "format"), ("Ctrl+L", "link"), ("Ctrl+O", "attach"), ("Ctrl+K", "commands"), ("Esc", "close")]
             }
             (Mode::Compose, _) => &[("Ctrl+Enter", "send"), ("Ctrl+E", "editor"), ("Ctrl+O", "attach"), ("Ctrl+Shift+M", "rich text"), ("Esc", "close")],
-            (Mode::Normal, Pane::Side) => &[("j k", "folders"), ("l", "messages"), ("?", "keys")],
+            (Mode::Normal, Pane::Side) => &[("j k", "folders"), ("Space", "fold account"), ("l", "messages"), ("?", "keys")],
             (Mode::Normal, Pane::List) => &[("j k", "move"), ("Enter", "read"), ("c", "write"), ("Ctrl+K", "commands"), ("?", "keys")],
             (Mode::Normal, Pane::Reader) if self.conv.borrow().len() > 1 => {
                 &[("j k", "scroll"), ("n p", "messages"), ("r", "reply"), ("I", "load images"), ("h", "back"), ("?", "keys")]
@@ -1225,11 +1228,18 @@ impl App {
             items.push(SideItem::Unified);
         }
         for (i, acc) in accounts.iter().enumerate() {
+            let folders = store.folders(&acc.name);
             let head = gtk::ListBoxRow::new();
-            head.set_selectable(false);
-            head.set_activatable(false);
+            head.add_css_class("side-head");
+            head.set_tooltip_text(Some(if acc.collapsed { "Show the folders (Space)" } else { "Fold the folders away (Space)" }));
             let hb = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             hb.add_css_class("side-acct");
+            if acc.collapsed {
+                hb.add_css_class("collapsed");
+            }
+            let chev = label(if acc.collapsed { "▸" } else { "▾" }, "side-chev");
+            chev.set_valign(gtk::Align::Center);
+            hb.append(&chev);
             let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             dot.add_css_class("acct-dot");
             dot.add_css_class(&format!("acct-dot-{}", i.min(15)));
@@ -1239,6 +1249,15 @@ impl App {
             names.append(ellipsize(&label(&acc.name, "side-acct-name")));
             names.append(ellipsize(&label(&acc.email, "side-acct-mail")));
             hb.append(&names);
+            if acc.collapsed {
+                // what the folded folders would show
+                let unseen: u32 = folders.iter().filter(|f| !matches!(f.role.as_str(), "trash" | "junk" | "sent" | "drafts")).map(|f| f.unseen).sum();
+                if unseen > 0 {
+                    let pill = label(&unseen.to_string(), "pill");
+                    pill.set_valign(gtk::Align::Center);
+                    hb.append(&pill);
+                }
+            }
             if i < 9 {
                 let k = label(&(i + 1).to_string(), "side-key");
                 k.set_valign(gtk::Align::Center);
@@ -1246,7 +1265,7 @@ impl App {
             }
             head.set_child(Some(&hb));
             self.side.append(&head);
-            items.push(SideItem::Header(i));
+            items.push(SideItem::Account(i));
             if crate::oauth::needs_sign_in(acc) {
                 let row = gtk::ListBoxRow::new();
                 row.set_selectable(false);
@@ -1255,9 +1274,11 @@ impl App {
                 ellipsize(&l);
                 row.set_child(Some(&l));
                 self.side.append(&row);
-                items.push(SideItem::Header(i));
+                items.push(SideItem::Note(i));
             }
-            let folders = store.folders(&acc.name);
+            if acc.collapsed {
+                continue;
+            }
             if folders.is_empty() {
                 let row = gtk::ListBoxRow::new();
                 row.set_selectable(false);
@@ -1269,7 +1290,7 @@ impl App {
                 ellipsize(&l);
                 row.set_child(Some(&l));
                 self.side.append(&row);
-                items.push(SideItem::Header(i));
+                items.push(SideItem::Note(i));
             }
             for f in folders {
                 let depth = if f.role.is_empty() && !f.delim.is_empty() { f.name.matches(f.delim.as_str()).count().min(4) } else { 0 };
@@ -1285,16 +1306,76 @@ impl App {
         drop(store);
         drop(accounts);
         *self.side_items.borrow_mut() = items;
-        // keep the selection on the current view
-        let want = match &*self.view.borrow() {
-            View::Unified => Some(SideItem::Unified),
-            View::Folder { acct, folder } => self.acct_idx(acct).map(|i| SideItem::Folder(i, folder.clone())),
-        };
-        let want = want.or(selected);
-        if let Some(pos) = want.and_then(|w| self.side_items.borrow().iter().position(|i| *i == w))
-            && let Some(row) = self.side.row_at_index(pos as i32) {
-                self.side.select_row(Some(&row));
+        // the cursor stays on an account row, else it follows the current view
+        if let Some(SideItem::Account(i)) = selected {
+            self.side_select(&SideItem::Account(i));
+        } else {
+            self.rebuild_side_selection();
+        }
+    }
+
+    /// Selects `item` in the sidebar if it is there; false when it is not.
+    fn side_select(&self, item: &SideItem) -> bool {
+        let Some(pos) = self.side_items.borrow().iter().position(|i| i == item) else { return false };
+        let Some(row) = self.side.row_at_index(pos as i32) else { return false };
+        self.side.select_row(Some(&row));
+        true
+    }
+
+    /// The sidebar item under the cursor.
+    fn side_current(&self) -> Option<SideItem> {
+        let i = self.side.selected_row()?.index();
+        self.side_items.borrow().get(i as usize).cloned()
+    }
+
+    /// Folds account `i`'s folders away (`Some(true)`), shows them (`Some(false)`) or switches
+    /// (`None`); saved as `collapsed` in its block. The cursor lands on the account row.
+    pub fn set_collapsed(self: &Rc<Self>, i: usize, on: Option<bool>) {
+        let Some(acc) = self.accounts.borrow().get(i).cloned() else { return };
+        let on = on.unwrap_or(!acc.collapsed);
+        if on == acc.collapsed {
+            return;
+        }
+        // expanded is the default: drop the key instead of writing it
+        let value = on.then_some(toml::Value::Boolean(true));
+        if let Err(e) = self.settings_account_set(&acc.name, &["collapsed"], value, false) {
+            self.toast(&format!("{e} (applies until restart)"), true);
+            if let Some(a) = self.accounts.borrow_mut().get_mut(i) {
+                a.collapsed = on;
             }
+        }
+        self.rebuild_side();
+        self.side_select(&SideItem::Account(i));
+    }
+
+    /// Space / Enter on the sidebar: an account row folds or unfolds.
+    pub fn side_toggle(self: &Rc<Self>) -> bool {
+        match self.side_current() {
+            Some(SideItem::Account(i)) => {
+                self.set_collapsed(i, None);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// h in the sidebar: an open account folds, a folder goes up to its account.
+    pub fn side_left(self: &Rc<Self>) {
+        match self.side_current() {
+            Some(SideItem::Account(i)) => self.set_collapsed(i, Some(true)),
+            Some(SideItem::Folder(i, _)) => {
+                self.side_select(&SideItem::Account(i));
+            }
+            _ => {}
+        }
+    }
+
+    /// l in the sidebar: a folded account opens, anything else moves on to the list.
+    pub fn side_right(self: &Rc<Self>) {
+        match self.side_current() {
+            Some(SideItem::Account(i)) if self.accounts.borrow().get(i).is_some_and(|a| a.collapsed) => self.set_collapsed(i, Some(false)),
+            _ => self.set_focus(Pane::List),
+        }
     }
 
     fn activate_side(self: &Rc<Self>, idx: usize) {
@@ -1305,12 +1386,16 @@ impl App {
                 let acct = self.accounts.borrow()[i].name.clone();
                 self.open_view(View::Folder { acct, folder: name });
             }
+            // a click on the account row
+            Some(SideItem::Account(i)) => self.set_collapsed(i, None),
             _ => {}
         }
     }
 
-    /// Moves the sidebar selection by `delta` selectable rows and opens it.
-    pub fn side_step(self: &Rc<Self>, delta: i32) {
+    /// Moves the sidebar selection by `delta` rows and opens a folder it lands on. With
+    /// `accounts` the account rows are stops too (j / k in the sidebar), else only folders are
+    /// ([ and ]).
+    pub fn side_step(self: &Rc<Self>, delta: i32, accounts: bool) {
         let items = self.side_items.borrow().clone();
         let cur = self.side.selected_row().map(|r| r.index()).unwrap_or(-1);
         let mut i = cur;
@@ -1319,13 +1404,17 @@ impl App {
             if i < 0 || i as usize >= items.len() {
                 return;
             }
-            if !matches!(items[i as usize], SideItem::Header(_)) {
-                break;
+            match items[i as usize] {
+                SideItem::Note(_) => {}
+                SideItem::Account(_) if !accounts => {}
+                _ => break,
             }
         }
         if let Some(row) = self.side.row_at_index(i) {
             self.side.select_row(Some(&row));
-            self.activate_side(i as usize);
+            if !matches!(items[i as usize], SideItem::Account(_)) {
+                self.activate_side(i as usize);
+            }
         }
     }
 
@@ -1348,15 +1437,20 @@ impl App {
         self.rebuild_side_selection();
     }
 
+    /// The sidebar cursor on the current view; on its account row while that is folded.
     fn rebuild_side_selection(&self) {
-        let want = match &*self.view.borrow() {
-            View::Unified => Some(SideItem::Unified),
-            View::Folder { acct, folder } => self.acct_idx(acct).map(|i| SideItem::Folder(i, folder.clone())),
-        };
-        if let Some(pos) = want.and_then(|w| self.side_items.borrow().iter().position(|i| *i == w))
-            && let Some(row) = self.side.row_at_index(pos as i32) {
-                self.side.select_row(Some(&row));
+        let view = self.view.borrow().clone();
+        match view {
+            View::Unified => {
+                self.side_select(&SideItem::Unified);
             }
+            View::Folder { acct, folder } => {
+                if let Some(i) = self.acct_idx(&acct)
+                    && !self.side_select(&SideItem::Folder(i, folder)) {
+                        self.side_select(&SideItem::Account(i));
+                    }
+            }
+        }
     }
 
     fn update_path(&self) {

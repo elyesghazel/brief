@@ -619,6 +619,17 @@ client_id = "x"
     }
 
     #[test]
+    fn account_collapses_in_the_sidebar() {
+        assert!(cfg(FILE).accounts.iter().all(|a| !a.collapsed));
+        let out = edit(FILE, Scope::Account("Personal"), &["collapsed"], Some(&Value::Boolean(true))).unwrap();
+        assert!(out.contains("\"\"\"\ncollapsed = true\n# trailing note"), "{out}");
+        let c = cfg(&out);
+        assert!(c.accounts[0].collapsed && !c.accounts[1].collapsed);
+        // expanded is the default: the key goes again
+        assert_eq!(edit(&out, Scope::Account("Personal"), &["collapsed"], None).unwrap(), FILE);
+    }
+
+    #[test]
     fn server_sub_tables() {
         let out = edit(FILE, Scope::Account("Work [old]"), &["imap", "host"], Some(&s("imap2.work.ch"))).unwrap();
         assert!(out.contains("[account.imap]\nhost = \"imap2.work.ch\"  # internal\nport = 993\n"));

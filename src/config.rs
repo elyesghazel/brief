@@ -113,6 +113,9 @@ pub struct Account {
     /// New-mail notifications for this account; the global `notify` still mutes them all.
     #[serde(default = "yes")]
     pub notify: bool,
+    /// Only the account's row in the sidebar, its folders folded away.
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 fn yes() -> bool {
@@ -258,6 +261,9 @@ impl Account {
         if !self.notify {
             out += "notify = false\n";
         }
+        if self.collapsed {
+            out += "collapsed = true\n";
+        }
         if self.is_oauth() {
             out += "auth = \"oauth2\"\n";
             let o = &self.oauth;
@@ -312,6 +318,7 @@ theme = "graphite"        # Ctrl+T to pick; "zunder" follows zunder's theme
 # signature = "-- \nMe"
 # color = "#f9e2af"
 # notify = false           # no new-mail notifications for this account
+# collapsed = true         # just the account row in the sidebar; Space folds it
 #
 # Gmail / Outlook sign in through the browser (the form does it, or `brief login <name>`).
 # Builds without brief's own OAuth apps need your client id:
@@ -596,6 +603,7 @@ mod tests {
             signature: String::new(),
             color: String::new(),
             notify: true,
+            collapsed: false,
         };
         let cfg: Config = toml::from_str(&acc.to_toml()).unwrap();
         assert_eq!(cfg.accounts[0].name, "Gmail \"x\"");
@@ -604,9 +612,11 @@ mod tests {
         assert_eq!(cfg.accounts[0].auth, Auth::Password);
         assert!(cfg.accounts[0].notify);
         assert!(!acc.to_toml().contains("notify"));
-        let muted = Account { notify: false, ..acc };
+        assert!(!cfg.accounts[0].collapsed);
+        let muted = Account { notify: false, collapsed: true, ..acc };
         let cfg: Config = toml::from_str(&muted.to_toml()).unwrap();
         assert!(!cfg.accounts[0].notify);
+        assert!(cfg.accounts[0].collapsed);
     }
 
     #[test]
@@ -626,6 +636,7 @@ mod tests {
             signature: String::new(),
             color: String::new(),
             notify: true,
+            collapsed: false,
         };
         let toml = acc.to_toml();
         assert!(toml.contains("oauth = { provider = \"microsoft\", client_id = \"abc\" }"));
@@ -692,6 +703,7 @@ smtp = { host = "mail.example.com", port = 587 }
             signature: String::new(),
             color: String::new(),
             notify: true,
+            collapsed: false,
         };
         let builtin = crate::oauth::Provider::Microsoft.defaults();
         // nothing configured: the built-in app
@@ -787,6 +799,7 @@ smtp = { host = "smtp.x.ch", port = 465 }
             signature: String::new(),
             color: String::new(),
             notify: true,
+            collapsed: false,
             auth: Auth::Password,
             oauth: OAuth::default(),
         };

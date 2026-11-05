@@ -87,6 +87,8 @@ row:selected .side-name { color: @fg; font-weight: bold; }
 .side-unified { margin-bottom: 6px; }
 .side-acct  { padding: 16px 10px 6px; }
 .side-acct-name { color: @fg; font-weight: bold; }
+.side-chev  { color: @faint; min-width: 10px; font-size: 0.8em; margin-right: -2px; }
+row:selected .side-chev, list.side > row.side-head:hover .side-chev { color: @fg; }
 .side-acct-mail { color: @faint; font-size: 0.85em; }
 .side-key   { color: @faint; font-size: 0.8em; border: 1px solid alpha(@ghost, 0.9); border-radius: 2px; padding: 0 5px; }
 .side-signed-out { color: @red; font-size: 0.9em; }

@@ -715,6 +715,7 @@ fn apply_field(acc: &mut Account, path: &[&str], value: Option<&toml::Value>) {
         ["signature"] => acc.signature = text,
         ["color"] => acc.color = text,
         ["notify"] => acc.notify = value.and_then(|v| v.as_bool()).unwrap_or(true),
+        ["collapsed"] => acc.collapsed = value.and_then(|v| v.as_bool()).unwrap_or(false),
         ["user"] => acc.user = text,
         ["password_cmd"] => acc.password_cmd = text,
         ["password"] => acc.password = text,
@@ -1530,7 +1531,7 @@ impl App {
 
     /// Writes one field of an account, applies it in memory and, with `restart`, restarts its
     /// sync with it.
-    fn settings_account_set(self: &Rc<Self>, name: &str, path: &[&str], value: Option<toml::Value>, restart: bool) -> Result<(), String> {
+    pub(super) fn settings_account_set(self: &Rc<Self>, name: &str, path: &[&str], value: Option<toml::Value>, restart: bool) -> Result<(), String> {
         let i = self.acct_idx(name).ok_or_else(|| format!("{name} is gone"))?;
         config::set_account(name, path, value.clone())?;
         apply_field(&mut self.accounts.borrow_mut()[i], path, value.as_ref());
@@ -2046,6 +2047,7 @@ mod tests {
             signature: String::new(),
             color: String::new(),
             notify: true,
+            collapsed: false,
         };
         apply_field(&mut acc, &["imap", "port"], Some(&toml::Value::Integer(143)));
         apply_field(&mut acc, &["imap", "security"], Some(&toml::Value::String("starttls".into())));
@@ -2058,5 +2060,9 @@ mod tests {
         assert!(!acc.notify);
         apply_field(&mut acc, &["notify"], None);
         assert!(acc.notify);
+        apply_field(&mut acc, &["collapsed"], Some(&toml::Value::Boolean(true)));
+        assert!(acc.collapsed);
+        apply_field(&mut acc, &["collapsed"], None);
+        assert!(!acc.collapsed);
     }
 }

@@ -376,6 +376,10 @@ impl App {
             }
         }
         items.splice(0..0, again);
+        for (i, acc) in self.accounts.borrow().iter().enumerate() {
+            let title = format!("{} account: {}", if acc.collapsed { "Expand" } else { "Collapse" }, acc.name);
+            items.push(item(title, "Space", move |a| a.set_collapsed(i, None)));
+        }
         let settings = item("Settings", ",", |a| a.open_settings());
         let at = if menu && !composing { 0 } else { items.iter().position(|i| i.title == "Compose").unwrap_or(0) };
         items.insert(at, settings);
@@ -528,6 +532,7 @@ pub const HELP: &[&[(&str, &str)]] = &[
         ("Ctrl+d / Ctrl+u", "half page"),
         ("Space", "page down in the message"),
         ("[ / ]", "previous / next folder"),
+        ("Space, h / l", "fold / unfold an account (sidebar)"),
         ("0, 1-9", "all inboxes, account inbox"),
         ("gi gs gd ga gt gj", "inbox sent drafts archive trash spam"),
         ("#Find", ""),
